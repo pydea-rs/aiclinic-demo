@@ -119,6 +119,7 @@ EOF
 RUN cat << 'EOF' > /app/start.sh
 #!/bin/sh
 set -e
+
 # Default port to 8080 if PORT is not set by Render
 export PORT="${PORT:-8080}"
 echo "==> Configuring Nginx on port ${PORT}..."
