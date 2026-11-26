@@ -1,0 +1,8 @@
+# Local config (may contain real admin credentials)
+.env
+
+# Generated seed output — contains plaintext passwords, do not commit
+seeded_*.json
+
+# Built binary
+/seeder

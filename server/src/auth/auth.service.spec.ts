@@ -1,0 +1,233 @@
+/**
+ * AuthService Unit Tests
+ *
+ * Tests:
+ *   verifyAndLogin  — valid credentials, wrong password, non-existent email, inactive user
+ *   register        — successful registration, duplicate email
+ *   logout          — session deletion
+ *   refreshSession  — valid user, non-existent user
+ *
+ * Uses randomized test data via test-data.factory.
+ */
+import { Test, TestingModule } from '@nestjs/testing';
+import {
+  BadRequestException,
+  ForbiddenException,
+  NotFoundException,
+} from '@nestjs/common';
+import { AuthService } from './auth.service';
+import { UserService } from '../user/user.service';
+import { UtilsService } from '../utils/utils.service';
+import {
+  buildUser,
+  randomEmail,
+  randomFirstName,
+  randomLastName,
+  randomPassword,
+  randomUuid,
+} from '../../test/helpers/test-data.factory';
+
+describe('AuthService', () => {
+  let authService: AuthService;
+  let userService: jest.Mocked<Partial<UserService>>;
+  let utilsService: jest.Mocked<Partial<UtilsService>>;
+
+  // Randomized user generated fresh each suite run
+  const mockUser = buildUser();
+
+  const mockSession = {
+    get: jest.fn(),
+    set: jest.fn(),
+    delete: jest.fn(),
+  };
+
+  const mockReply = {
+    request: { session: mockSession },
+  } as any;
+
+  beforeEach(async () => {
+    userService = {
+      getBy: jest.fn(),
+      getById: jest.fn(),
+      createUser: jest.fn(),
+    };
+
+    utilsService = {
+      compareHash: jest.fn(),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        AuthService,
+        { provide: UserService, useValue: userService },
+        { provide: UtilsService, useValue: utilsService },
+      ],
+    }).compile();
+
+    authService = module.get<AuthService>(AuthService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // ───────────────────── verifyAndLogin ─────────────────────
+
+  describe('verifyAndLogin', () => {
+    it('should login successfully with valid credentials', async () => {
+      (userService.getBy as jest.Mock).mockResolvedValue(mockUser as any);
+      (utilsService.compareHash as jest.Mock).mockResolvedValue(true as any);
+
+      const result = await authService.verifyAndLogin(
+        { email: mockUser.email, password: randomPassword() },
+        mockReply,
+      );
+
+      expect(result.email).toBe(mockUser.email);
+      expect((result as any).password).toBeUndefined();
+      expect(mockSession.set).toHaveBeenCalledWith(
+        'user',
+        expect.objectContaining({ email: mockUser.email }),
+      );
+    });
+
+    it('should throw BadRequestException for wrong password', async () => {
+      (userService.getBy as jest.Mock).mockResolvedValue(mockUser as any);
+      (utilsService.compareHash as jest.Mock).mockResolvedValue(false as any);
+
+      await expect(
+        authService.verifyAndLogin(
+          { email: mockUser.email, password: randomPassword() },
+          mockReply,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should throw BadRequestException for non-existent email', async () => {
+      (userService.getBy as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        authService.verifyAndLogin(
+          { email: randomEmail('ghost'), password: randomPassword() },
+          mockReply,
+        ),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it.each([
+      [
+        'banned with a reason',
+        { isBanned: true, banReason: 'Spam' },
+        'Your account has been banned. Reason: Spam',
+      ],
+      [
+        'banned without a reason',
+        { isBanned: true, banReason: null },
+        'Your account has been banned.',
+      ],
+      ['deactivated', { isActive: false }, 'Account is deactivated'],
+      [
+        'banned and deactivated',
+        { isActive: false, isBanned: true, banReason: null },
+        'Your account has been banned.',
+      ],
+    ])(
+      'should refuse a %s user with the right password and set no session',
+      async (_label, state, message) => {
+        (userService.getBy as jest.Mock).mockResolvedValue({
+          ...mockUser,
+          ...state,
+        } as any);
+        (utilsService.compareHash as jest.Mock).mockResolvedValue(true as any);
+
+        const login = authService.verifyAndLogin(
+          { email: mockUser.email, password: randomPassword() },
+          mockReply,
+        );
+
+        await expect(login).rejects.toThrow(ForbiddenException);
+        await expect(login).rejects.toThrow(message);
+        expect(mockSession.set).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should not reveal that an account is banned to a wrong password', async () => {
+      (userService.getBy as jest.Mock).mockResolvedValue({
+        ...mockUser,
+        isBanned: true,
+        banReason: 'Spam',
+      } as any);
+      (utilsService.compareHash as jest.Mock).mockResolvedValue(false as any);
+
+      await expect(
+        authService.verifyAndLogin(
+          { email: mockUser.email, password: randomPassword() },
+          mockReply,
+        ),
+      ).rejects.toThrow(new BadRequestException('Invalid email or password!'));
+      expect(mockSession.set).not.toHaveBeenCalled();
+    });
+  });
+
+  // ───────────────────── register ─────────────────────
+
+  describe('register', () => {
+    it('should register a new user and set session', async () => {
+      const newId = randomUuid();
+      const newUser = { ...mockUser, id: newId };
+      (userService.createUser as jest.Mock).mockResolvedValue(newUser as any);
+
+      const result = await authService.register(
+        {
+          email: randomEmail('new'),
+          firstname: randomFirstName(),
+          lastname: randomLastName(),
+          password: randomPassword(),
+          isPrivate: false,
+        },
+        mockReply,
+      );
+
+      expect(result.email).toBe(mockUser.email);
+      expect(mockSession.set).toHaveBeenCalledWith(
+        'user',
+        expect.objectContaining({ id: newId }),
+      );
+    });
+  });
+
+  // ───────────────────── logout ─────────────────────
+
+  describe('logout', () => {
+    it('should delete the session', async () => {
+      await authService.logout(mockReply);
+      expect(mockSession.delete).toHaveBeenCalled();
+    });
+  });
+
+  // ───────────────────── refreshSession ─────────────────────
+
+  describe('refreshSession', () => {
+    it('should re-fetch user and update session', async () => {
+      const updatedName = randomFirstName();
+      const freshUser = { ...mockUser, firstname: updatedName };
+      (userService.getById as jest.Mock).mockResolvedValue(freshUser as any);
+
+      const result = await authService.refreshSession(mockSession, mockUser.id);
+
+      expect(result.firstname).toBe(updatedName);
+      expect(mockSession.set).toHaveBeenCalledWith(
+        'user',
+        expect.objectContaining({ firstname: updatedName }),
+      );
+    });
+
+    it('should throw NotFoundException for non-existent user', async () => {
+      (userService.getById as jest.Mock).mockResolvedValue(null);
+
+      await expect(
+        authService.refreshSession(mockSession, randomUuid()),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+});

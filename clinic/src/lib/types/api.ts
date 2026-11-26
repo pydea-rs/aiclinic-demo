@@ -1,0 +1,440 @@
+// ─── Enums (matching backend Prisma schema) ────────────────────────────────
+
+export type UserRole = 'NONE' | 'DOCTOR' | 'NURSE' | 'PATIENT';
+
+export type ConsultationStatus =
+  | 'CREATED'
+  | 'PENDING_DOCTOR_REVIEW'
+  | 'DOCTOR_DECIDED'
+  | 'PENDING_PAYMENT'
+  | 'PAYMENT_CONFIRMED'
+  | 'IN_PROGRESS'
+  | 'COMPLETED'
+  | 'CANCELLED';
+
+export type ConsultationMode = 'ASYNC' | 'ONLINE' | 'IN_PERSON';
+
+export type VisitMethod = 'CHAT' | 'VOICE_CALL' | 'VIDEO_CALL' | 'ON_SITE';
+
+export type MessageType = 'TEXT' | 'IMAGE' | 'FILE' | 'AUDIO' | 'VIDEO' | 'SYSTEM';
+
+export type AppointmentStatus = 'PENDING' | 'CONFIRMED' | 'CANCELLED' | 'COMPLETED' | 'NO_SHOW';
+
+export type TriageLevel = 'SELF_CARE' | 'SEE_DOCTOR' | 'URGENT' | 'EMERGENCY';
+
+export type DocumentType = 'LICENSE' | 'ID_CARD' | 'CERTIFICATION' | 'PHOTO' | 'OTHER';
+
+export type DocumentStatus = 'PENDING' | 'APPROVED' | 'REJECTED';
+
+export type NotificationChannel = 'EMAIL' | 'PUSH' | 'BOTH';
+
+export type PaymentStatus = 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED' | 'REFUNDED';
+
+export type VisitType = 'CONSULTATION' | 'EXAMINATION' | 'SURGERY' | 'LABORATORY' | 'RADIOLOGY' | 'PHARMACY' | 'DENTISTRY' | 'THERAPY' | 'NUTRITION' | 'OTHER';
+
+export type DoctorSpecialty =
+  | 'CARDIOLOGY' | 'DERMATOLOGY' | 'ENT' | 'GASTROENTEROLOGY'
+  | 'GYNECOLOGY' | 'NEUROLOGY' | 'ONCOLOGY' | 'ORTHOPEDICS'
+  | 'PEDIATRICS' | 'PSYCHIATRY' | 'UROLOGY' | 'GENERAL' | 'OTHER';
+
+// ─── API Envelope ───────────────────────────────────────────────────────────
+
+export interface ApiResponse<T = unknown> {
+  status: number;
+  message: string;
+  contents: T;
+}
+
+export interface ApiError {
+  status: number;
+  message: string;
+  contents: null;
+  timestamp: string;
+  path: string;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  total: number;
+  skip: number;
+  take: number;
+}
+
+// ─── User & Auth ────────────────────────────────────────────────────────────
+
+export interface User {
+  id: string;
+  email: string;
+  firstname: string;
+  lastname: string;
+  role: UserRole;
+  isAdmin: boolean;
+  isSuperAdmin: boolean;
+  isPrivate: boolean;
+  isActive: boolean;
+  isBanned: boolean;
+  banReason?: string;
+  bannedAt?: string;
+  bannedBy?: string;
+  avatar?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuthState {
+  user: User | null;
+  isAuthenticated: boolean;
+  initializing: boolean;
+}
+
+// ─── Consultation ───────────────────────────────────────────────────────────
+
+export interface Consultation {
+  id: string;
+  patientId: string;
+  doctorId: number;
+  soapId?: string;
+  status: ConsultationStatus;
+  doctorDecision?: ConsultationMode;
+  visitMethod?: VisitMethod;
+  notes?: string;
+  summary?: string;
+  followUpNeeded: boolean;
+  completedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+  patient?: Pick<User, 'id' | 'firstname' | 'lastname' | 'avatar'>;
+  doctor?: DoctorProfile;
+  soap?: PatientSOAP;
+  chat?: Chat;
+}
+
+// ─── SOAP ───────────────────────────────────────────────────────────────────
+
+export interface PatientSOAP {
+  id: string;
+  userId: string;
+  conversationId: string;
+  subjective?: string;
+  objective?: string;
+  assessment?: string;
+  plan?: string;
+  rawNote: string;
+  suggestedSpecialty?: DoctorSpecialty;
+  triageLevel?: TriageLevel;
+  confidenceScores?: Record<string, number>;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Doctor ─────────────────────────────────────────────────────────────────
+
+export interface DoctorProfile {
+  id: number;
+  userId: string;
+  startedAt: string;
+  specialty: DoctorSpecialty | string;
+  secondarySpecialties: DoctorSpecialty[];
+  university?: string;
+  location?: string;
+  clinicLocation?: string;
+  bio?: string;
+  visitMethods: VisitMethod[];
+  visitTypes: VisitType[];
+  phoneNumber?: string;
+  languages: string[];
+  licenseNumber?: string;
+  verified: boolean;
+  verifiedAt?: string;
+  verifiedBy?: string;
+  rejectionReason?: string;
+  platformSummary?: string;
+  createdAt: string;
+  updatedAt: string;
+  user?: Pick<User, 'id' | 'firstname' | 'lastname' | 'avatar'>;
+  averageRating?: number | null;
+  totalReviews?: number;
+}
+
+export interface DoctorRating {
+  averageRating: number | null;
+  totalReviews: number;
+  distribution: Record<1 | 2 | 3 | 4 | 5, number>;
+}
+
+export interface DoctorDocument {
+  id: number;
+  doctorId: number;
+  type: DocumentType | string;
+  fileUrl: string;
+  fileName: string;
+  mimeType: string;
+  status: DocumentStatus | string;
+  reviewedAt?: string;
+  reviewedBy?: string;
+  rejectReason?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PendingDoctor extends Omit<DoctorProfile, 'user'> {
+  user: Pick<User, 'id' | 'firstname' | 'lastname' | 'email'>;
+  documents: DoctorDocument[];
+}
+
+// ─── Review ─────────────────────────────────────────────────────────────────
+
+export interface DoctorReview {
+  id: number;
+  reviewerId: string;
+  doctorId: number;
+  title?: string;
+  overview?: string;
+  verified: boolean;
+  rating: number;
+  createdAt: string;
+  updatedAt: string;
+  reviewer?: Pick<User, 'id' | 'firstname' | 'lastname' | 'avatar'>;
+  doctor?: Pick<DoctorProfile, 'id' | 'specialty'> & {
+    user?: Pick<User, 'firstname' | 'lastname'>;
+  };
+}
+
+// ─── Chat ───────────────────────────────────────────────────────────────────
+
+export interface ChatParticipant extends Pick<User, 'id' | 'firstname' | 'lastname' | 'avatar' | 'role'> {
+  joinedAt: string;
+  lastSeenAt?: string | null;
+  /** Presence when the chat was fetched. */
+  isOnline?: boolean;
+}
+
+export interface Chat {
+  id: string;
+  topic?: string;
+  consultationId?: string;
+  createdAt: string;
+  updatedAt: string;
+  closedAt?: string;
+  participants?: ChatParticipant[];
+  lastMessage?: {
+    content: string;
+    createdAt: string;
+    senderId: string;
+  };
+  unreadCount?: number;
+}
+
+export interface Message {
+  id: string;
+  chatId: string;
+  senderId: string;
+  content: string;
+  type: MessageType;
+  fileUrl?: string;
+  repliedToId?: string;
+  readBy?: Array<{ userId: string; readAt: string }>;
+  editedAt?: string;
+  deletedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Scheduling ─────────────────────────────────────────────────────────────
+
+export interface DoctorAvailability {
+  id: number;
+  doctorId: number;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SlotDuration {
+  id: number;
+  doctorId: number;
+  minutes: number;
+  price: string;
+  label?: string;
+  isActive: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AvailabilityException {
+  id: number;
+  doctorId: number;
+  date: string;
+  isBlocked: boolean;
+  startTime?: string;
+  endTime?: string;
+  reason?: string;
+  createdAt: string;
+}
+
+export interface Appointment {
+  id: number;
+  patientId: string;
+  doctorId: number;
+  consultationId?: string;
+  dateTime: string;
+  durationMinutes: number;
+  price: string;
+  method: VisitMethod | string;
+  status: AppointmentStatus;
+  notes?: string;
+  calendlyEventUri?: string;
+  calendlyInviteeUri?: string;
+  calendlyRescheduleUrl?: string;
+  calendlyCancelUrl?: string;
+  createdAt: string;
+  updatedAt: string;
+  patient?: Pick<User, 'id' | 'firstname' | 'lastname' | 'email'>;
+  doctor?: DoctorProfile;
+}
+
+// ─── Payment ───────────────────────────────────────────────────────────────
+
+export interface Payment {
+  id: number;
+  userId: string;
+  consultationId?: string;
+  amount: string;
+  currency: string;
+  status: PaymentStatus;
+  method?: string;
+  gatewayId?: string;
+  gatewayResponse?: Record<string, unknown> | null;
+  paidAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+// ─── Notification ───────────────────────────────────────────────────────────
+
+export interface Notification {
+  id: number;
+  userId: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+  channel: NotificationChannel;
+  isRead: boolean;
+  sentAt?: string;
+  readAt?: string;
+  createdAt: string;
+}
+
+// ─── Matching ───────────────────────────────────────────────────────────────
+
+export type MatchStatus =
+  | 'SEARCHING'
+  | 'MATCHED'
+  | 'ACCEPTED'
+  | 'CONSULTATION_CREATED'
+  | 'TIMEOUT'
+  | 'MANUAL_BROWSE'
+  | 'CANCELLED';
+
+export type NotificationType =
+  | 'CONSULTATION_REQUEST'
+  | 'DOCTOR_DECISION'
+  | 'PAYMENT_CONFIRMED'
+  | 'APPOINTMENT_REMINDER'
+  | 'APPOINTMENT_CANCELLED'
+  | 'NEW_CHAT_MESSAGE'
+  | 'NEW_REVIEW'
+  | 'DOCTOR_VERIFIED'
+  | 'SOAP_READY'
+  | 'NURSE_INVITATION'
+  | 'NURSE_INVITATION_ANSWERED'
+  | 'SYSTEM';
+
+export interface MatchRequest {
+  id: string;
+  patientId: string;
+  soapId?: string;
+  specialty?: DoctorSpecialty;
+  triageLevel?: TriageLevel;
+  status: MatchStatus;
+  matchedDoctorId?: number;
+  matchedDoctor?: {
+    user: Pick<User, 'id' | 'firstname' | 'lastname' | 'avatar'>;
+  };
+  soap?: Pick<PatientSOAP, 'id' | 'suggestedSpecialty' | 'triageLevel'>;
+  consultationId?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ScoredDoctor {
+  doctorId: number;
+  userId: string;
+  firstname: string;
+  lastname: string;
+  avatar?: string;
+  specialty: DoctorSpecialty;
+  secondarySpecialties: DoctorSpecialty[];
+  averageRating?: number | null;
+  totalReviews: number;
+  availableSlots: number;
+  score: number;
+}
+
+// ─── Doctor Stats ──────────────────────────────────────────────────
+
+export interface DoctorStats {
+  upcomingAppointments: number;
+  activeConsultations: number;
+  pendingMatchRequests: number;
+  totalPatientsSeen: number;
+  completedConsultations: number;
+  totalAppointments: number;
+}
+
+// ─── Nurse Assignment ──────────────────────────────────────────────
+
+export type NursePermission =
+  | 'VIEW_PATIENTS'
+  | 'CHAT_WITH_PATIENTS'
+  | 'MANAGE_APPOINTMENTS'
+  | 'VIEW_CONSULTATION_NOTES'
+  | 'VIEW_SOAPS'
+  | 'MANAGE_SCHEDULE';
+
+export type NurseAssignmentStatus = 'PENDING' | 'ACCEPTED' | 'DECLINED';
+
+/** Also a nurse invitation: PENDING until the invitee answers; in effect only while isActive. */
+export interface NurseAssignment {
+  id: number;
+  doctorId: number;
+  nurseId: string;
+  permissions: NursePermission[];
+  isActive: boolean;
+  status: NurseAssignmentStatus;
+  respondedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+  nurse?: Pick<User, 'id' | 'firstname' | 'lastname' | 'email' | 'avatar'>;
+  doctor?: DoctorProfile;
+}
+
+// ─── Admin ──────────────────────────────────────────────────────────────────
+
+export interface PlatformStats {
+  totalUsers: number;
+  totalDoctors: number;
+  totalPatients: number;
+  totalConsultations: number;
+  pendingVerifications: number;
+  activeConsultations: number;
+  bannedUsers: number;
+  totalAppointments: number;
+  newUsersThisMonth: number;
+  totalRevenue: number;
+}

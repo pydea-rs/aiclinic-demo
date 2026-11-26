@@ -1,0 +1,126 @@
+import React, { useState } from 'react';
+import { patientApi, PatientProfile } from '../../../api';
+import { ArrayFieldEditor } from './ArrayFieldEditor';
+import toast from 'react-hot-toast';
+import { getErrorMessage } from '../../../lib/api/error.utils';
+
+interface PatientProfileFormProps {
+  initialData?: PatientProfile;
+  onSubmitSuccess?: () => void;
+}
+
+export const PatientProfileForm: React.FC<PatientProfileFormProps> = ({
+  initialData,
+  onSubmitSuccess,
+}) => {
+  const [loading, setLoading] = useState(false);
+  const [formData, setFormData] = useState<Partial<PatientProfile>>(initialData || {
+    location: '',
+    bio: '',
+    medicalHistory: [],
+    allergies: [],
+    medications: [],
+    surgeries: [],
+    familyHistory: [],
+  });
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    try {
+      // Send ONLY the fields the backend DTO accepts. Spreading the full
+      // profile (id, userId, createdAt, ...) is rejected by the server's
+      // `forbidNonWhitelisted` validation with HTTP 400.
+      const payload: Partial<PatientProfile> = {
+        location: formData.location,
+        bio: formData.bio,
+        medicalHistory: formData.medicalHistory,
+        allergies: formData.allergies,
+        medications: formData.medications,
+        surgeries: formData.surgeries,
+        familyHistory: formData.familyHistory,
+      };
+      if (initialData?.id) {
+        await patientApi.updateProfile(payload);
+        toast.success('Profile updated successfully');
+      } else {
+        await patientApi.createProfile(payload);
+        toast.success('Profile created successfully');
+      }
+      onSubmitSuccess?.();
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to save profile'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <form onSubmit={handleSubmit} className="bg-white rounded-lg shadow p-6 space-y-6">
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Location</label>
+        <input
+          type="text"
+          value={formData.location || ''}
+          onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+          className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+          placeholder="Your location"
+        />
+      </div>
+
+      <div>
+        <label className="block text-sm font-medium text-gray-700 mb-2">Bio</label>
+        <textarea
+          value={formData.bio || ''}
+          onChange={(e) => setFormData({ ...formData, bio: e.target.value })}
+          className="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
+          rows={3}
+          placeholder="About yourself"
+        />
+      </div>
+
+      <ArrayFieldEditor
+        label="Medical History"
+        items={formData.medicalHistory || []}
+        onChange={(items) => setFormData({ ...formData, medicalHistory: items })}
+        placeholder="e.g., Hypertension, Diabetes"
+      />
+
+      <ArrayFieldEditor
+        label="Allergies"
+        items={formData.allergies || []}
+        onChange={(items) => setFormData({ ...formData, allergies: items })}
+        placeholder="e.g., Penicillin, Peanuts"
+      />
+
+      <ArrayFieldEditor
+        label="Current Medications"
+        items={formData.medications || []}
+        onChange={(items) => setFormData({ ...formData, medications: items })}
+        placeholder="e.g., Aspirin 100mg"
+      />
+
+      <ArrayFieldEditor
+        label="Past Surgeries"
+        items={formData.surgeries || []}
+        onChange={(items) => setFormData({ ...formData, surgeries: items })}
+        placeholder="e.g., Appendectomy 2020"
+      />
+
+      <ArrayFieldEditor
+        label="Family History"
+        items={formData.familyHistory || []}
+        onChange={(items) => setFormData({ ...formData, familyHistory: items })}
+        placeholder="e.g., Father - Heart Disease"
+      />
+
+      <button
+        type="submit"
+        disabled={loading}
+        className="w-full btn-primary py-2 disabled:opacity-50 font-medium"
+      >
+        {loading ? 'Saving...' : 'Save Profile'}
+      </button>
+    </form>
+  );
+};

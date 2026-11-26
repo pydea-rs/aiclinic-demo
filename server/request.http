@@ -1,0 +1,63 @@
+@host = http://localhost:8080
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiI3MjUwZmQzYi05ZmNkLTRiMWMtYTcyZS04NDhiYTc1YjQ5MzAiLCJlbWFpbCI6ImVtYWlsQHQuY29tIiwiaWF0IjoxNzU4NjMwMzE0LCJleHAiOjE3NTg3MTY3MTQsImlzcyI6IkFpQ2xpbmlDbyJ9.myqYCIy1JG2GEEIzHKSzr20LO4xZ1c-r-2ek3hcDDFY
+
+POST {{host}}/chat
+Content-Type: application/json
+
+{
+    "userId": 1,
+    "message": "what action do you suggest for me to take?"
+}
+
+
+### Register
+POST {{host}}/auth/register
+Content-Type: application/json
+
+{
+    "email": "emasi2l@t.com",
+    "firstname": "first",
+    "lastname": "last",
+    "password": "PassWord1",
+    "role": "PATIENT"
+}
+
+### login
+POST {{host}}/auth/login
+Content-Type: application/json
+
+{
+    "email": "email@t.com",
+    "password": "PassWord1"
+}
+
+### logout
+POST {{host}}/auth/logout
+Content-Type: application/json
+
+{}
+
+### start conversation
+POST {{host}}/ai-agents/test
+Content-Type: application/json
+
+{}
+
+
+### start conversation
+POST {{host}}/ai-agents/message
+Content-Type: application/json
+
+{
+    "conversationId": "conv_01K3WAFQMCY0ZQS181NTG803KG",
+    "text": "I have headache."
+}
+
+### Get stream
+GET {{host}}/ai-agents/stream/conv_01K3WAFQMCY0ZQS181NTG803KG
+Content-Type: application/json
+
+
+### Get stream
+GET {{host}}/user/7250fd3b-9fcd-4b1c-a72e-848ba75b4930
+Content-Type: application/json

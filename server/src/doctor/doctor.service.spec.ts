@@ -1,0 +1,558 @@
+/**
+ * DoctorService Unit Tests
+ *
+ * Tests:
+ *   hasProfile          — doctor has profile, no profile, check any kind
+ *   createDoctorProfile — successful, wrong role, duplicate profile
+ *   updateProfile       — successful, profile not found
+ *   resubmitForReview   — clears rejection, not found, verified, not rejected, concurrent change
+ *   findAll             — no filters, with specialty filter, with search, pagination
+ *   findOne             — found verified, not found, unverified
+ *
+ * Uses randomized test data via test-data.factory.
+ */
+import { Test, TestingModule } from '@nestjs/testing';
+import {
+  ConflictException,
+  MethodNotAllowedException,
+  NotFoundException,
+} from '@nestjs/common';
+import { DoctorService } from './doctor.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { FileUploadService } from '../file-upload/file-upload.service';
+import {
+  DoctorSpecialtiesEnum,
+  VisitMethodsEnum,
+  DocumentTypeEnum,
+} from '@prisma/client';
+import {
+  createMockPrismaService,
+  MockPrismaService,
+} from '../../test/helpers/mock-prisma.helper';
+import {
+  buildUser,
+  buildDoctorUser,
+  buildDoctorProfile,
+  randomSpecialty,
+  randomCareerStartDate,
+  randomBio,
+  randomUuid,
+} from '../../test/helpers/test-data.factory';
+
+describe('DoctorService', () => {
+  let service: DoctorService;
+  let prisma: MockPrismaService;
+  let fileUploadService: Record<string, jest.Mock>;
+
+  const mockDoctorUser = buildDoctorUser();
+  const mockPatientUser = buildUser();
+
+  const mockProfileData = {
+    startedAt: randomCareerStartDate(),
+    specialty: randomSpecialty(),
+    visitMethods: ['CHAT'],
+    visitTypes: ['CONSULTATION'],
+  };
+
+  const mockProfile = buildDoctorProfile({ userId: mockDoctorUser.id });
+
+  beforeEach(async () => {
+    prisma = createMockPrismaService();
+    fileUploadService = {
+      uploadFile: jest.fn(),
+      deleteFile: jest.fn(),
+      getFileUrl: jest.fn(),
+    };
+
+    const module: TestingModule = await Test.createTestingModule({
+      providers: [
+        DoctorService,
+        { provide: PrismaService, useValue: prisma },
+        { provide: FileUploadService, useValue: fileUploadService },
+      ],
+    }).compile();
+
+    service = module.get<DoctorService>(DoctorService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  // ───────────────────── hasProfile ─────────────────────
+
+  describe('hasProfile', () => {
+    it('should return profile when doctor has one', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(mockProfile);
+
+      const result = await service.hasProfile(mockDoctorUser.id);
+      expect(result).toEqual(mockProfile);
+    });
+
+    it('should return falsy when doctor has no profile', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+
+      const result = await service.hasProfile(mockDoctorUser.id);
+      expect(result).toBeFalsy();
+    });
+
+    it('should check patient profile when fromAnyKind is true', async () => {
+      const userId = randomUuid();
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+      prisma.patientProfile.findUnique.mockResolvedValue({ id: randomUuid() });
+
+      const result = await service.hasProfile(userId, true);
+      expect(result).toBeTruthy();
+      expect(prisma.patientProfile.findUnique).toHaveBeenCalled();
+    });
+
+    it('should NOT check patient profile when fromAnyKind is false', async () => {
+      const userId = randomUuid();
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+
+      await service.hasProfile(userId, false);
+      expect(prisma.patientProfile.findUnique).not.toHaveBeenCalled();
+    });
+  });
+
+  // ───────────────────── createDoctorProfile ─────────────────────
+
+  describe('createDoctorProfile', () => {
+    it('should create doctor profile for doctor user', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+      prisma.doctorProfile.create.mockResolvedValue(mockProfile);
+
+      const result = await service.createDoctorProfile(
+        mockDoctorUser as any,
+        mockProfileData as any,
+      );
+
+      expect(result).toEqual(mockProfile);
+      expect(prisma.doctorProfile.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ userId: mockDoctorUser.id }),
+        }),
+      );
+    });
+
+    it('should throw MethodNotAllowedException for non-doctor user', async () => {
+      await expect(
+        service.createDoctorProfile(
+          mockPatientUser as any,
+          mockProfileData as any,
+        ),
+      ).rejects.toThrow(MethodNotAllowedException);
+    });
+
+    it('should throw ConflictException if doctor already has profile', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(mockProfile);
+
+      await expect(
+        service.createDoctorProfile(
+          mockDoctorUser as any,
+          mockProfileData as any,
+        ),
+      ).rejects.toThrow(ConflictException);
+    });
+  });
+
+  // ───────────────────── updateProfile ─────────────────────
+
+  describe('updateProfile', () => {
+    it('should update doctor profile successfully', async () => {
+      const updateBio = randomBio();
+      const updateData = { bio: updateBio, university: 'MIT' };
+      const updatedProfile = { ...mockProfile, ...updateData };
+
+      prisma.doctorProfile.findUnique.mockResolvedValue(mockProfile);
+      prisma.doctorProfile.update.mockResolvedValue(updatedProfile);
+
+      const result = await service.updateProfile(
+        mockDoctorUser as any,
+        updateData,
+      );
+
+      expect(result).toEqual(updatedProfile);
+      expect(prisma.doctorProfile.update).toHaveBeenCalledWith({
+        where: { userId: mockDoctorUser.id },
+        data: updateData,
+      });
+    });
+
+    it('should throw NotFoundException when profile does not exist', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.updateProfile(mockDoctorUser as any, { bio: randomBio() }),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ───────────────────── resubmitForReview ─────────────────────
+
+  describe('resubmitForReview', () => {
+    const rejectionReason = `Unreadable license ${randomUuid().slice(0, 8)}`;
+    const rejected = { ...mockProfile, verified: false, rejectionReason };
+
+    it('should clear the rejection reason of a rejected profile', async () => {
+      const resubmitted = { ...rejected, rejectionReason: null };
+      prisma.doctorProfile.findUnique.mockResolvedValue(rejected);
+      prisma.doctorProfile.updateMany.mockResolvedValue({ count: 1 });
+      prisma.doctorProfile.findUniqueOrThrow.mockResolvedValue(resubmitted);
+
+      const result = await service.resubmitForReview(mockDoctorUser as any);
+
+      expect(result).toEqual(resubmitted);
+      expect(prisma.doctorProfile.findUnique).toHaveBeenCalledWith({
+        where: { userId: mockDoctorUser.id },
+      });
+      expect(prisma.doctorProfile.updateMany).toHaveBeenCalledWith({
+        where: { id: mockProfile.id, verified: false, rejectionReason },
+        data: { rejectionReason: null },
+      });
+    });
+
+    it('should throw NotFoundException when the profile does not exist', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.resubmitForReview(mockDoctorUser as any),
+      ).rejects.toThrow(NotFoundException);
+      expect(prisma.doctorProfile.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      [
+        'already verified',
+        { verified: true, rejectionReason: null },
+        'Your profile is already verified.',
+      ],
+      [
+        'awaiting review',
+        { verified: false, rejectionReason: null },
+        'Your profile is already awaiting review.',
+      ],
+    ])(
+      'should throw ConflictException when %s',
+      async (_case, state, message) => {
+        prisma.doctorProfile.findUnique.mockResolvedValue({
+          ...mockProfile,
+          ...state,
+        });
+
+        await expect(
+          service.resubmitForReview(mockDoctorUser as any),
+        ).rejects.toThrow(new ConflictException(message));
+        expect(prisma.doctorProfile.updateMany).not.toHaveBeenCalled();
+      },
+    );
+
+    it('should throw ConflictException when the status changed meanwhile', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(rejected);
+      prisma.doctorProfile.updateMany.mockResolvedValue({ count: 0 });
+
+      await expect(
+        service.resubmitForReview(mockDoctorUser as any),
+      ).rejects.toThrow(ConflictException);
+      expect(prisma.doctorProfile.findUniqueOrThrow).not.toHaveBeenCalled();
+    });
+  });
+
+  // ───────────────────── findAll ─────────────────────
+
+  describe('findAll', () => {
+    const mockProfiles = [
+      {
+        ...mockProfile,
+        verified: true,
+        user: {
+          id: mockDoctorUser.id,
+          firstname: mockDoctorUser.firstname,
+          lastname: mockDoctorUser.lastname,
+          avatar: null as null,
+        },
+        _count: { reviewsAbout: 5 },
+      },
+    ];
+
+    it('should return paginated verified doctors with no filters', async () => {
+      prisma.doctorProfile.findMany.mockResolvedValue(mockProfiles);
+      prisma.doctorProfile.count.mockResolvedValue(1);
+      prisma.doctorReview.groupBy.mockResolvedValue([
+        {
+          doctorId: mockProfiles[0].id,
+          _avg: { rating: 4.2 },
+          _count: { rating: 5 },
+        },
+      ]);
+
+      const result = await service.findAll({});
+
+      expect(result).toEqual({
+        data: mockProfiles.map((p) => ({
+          ...p,
+          averageRating: 4.2,
+          totalReviews: 5,
+        })),
+        total: 1,
+        skip: 0,
+        take: 20,
+      });
+      expect(prisma.doctorProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { verified: true },
+          skip: 0,
+          take: 20,
+        }),
+      );
+    });
+
+    it('should filter by specialty', async () => {
+      prisma.doctorProfile.findMany.mockResolvedValue([]);
+      prisma.doctorProfile.count.mockResolvedValue(0);
+      prisma.doctorReview.groupBy.mockResolvedValue([]);
+
+      await service.findAll({ specialty: DoctorSpecialtiesEnum.CARDIOLOGY });
+
+      expect(prisma.doctorProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            verified: true,
+            specialty: DoctorSpecialtiesEnum.CARDIOLOGY,
+          }),
+        }),
+      );
+    });
+
+    it('should filter by visitMethod', async () => {
+      prisma.doctorProfile.findMany.mockResolvedValue([]);
+      prisma.doctorProfile.count.mockResolvedValue(0);
+      prisma.doctorReview.groupBy.mockResolvedValue([]);
+
+      await service.findAll({ visitMethod: VisitMethodsEnum.CHAT });
+
+      expect(prisma.doctorProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            visitMethods: { has: VisitMethodsEnum.CHAT },
+          }),
+        }),
+      );
+    });
+
+    it('should apply pagination from query params', async () => {
+      prisma.doctorProfile.findMany.mockResolvedValue([]);
+      prisma.doctorProfile.count.mockResolvedValue(0);
+      prisma.doctorReview.groupBy.mockResolvedValue([]);
+
+      const result = await service.findAll({ skip: 10 as any, take: 5 as any });
+
+      expect(result.skip).toBe(10);
+      expect(result.take).toBe(5);
+    });
+
+    it('should filter by search (doctor name)', async () => {
+      const searchTerm = mockDoctorUser.lastname;
+      prisma.doctorProfile.findMany.mockResolvedValue([]);
+      prisma.doctorProfile.count.mockResolvedValue(0);
+      prisma.doctorReview.groupBy.mockResolvedValue([]);
+
+      await service.findAll({ search: searchTerm });
+
+      expect(prisma.doctorProfile.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            user: {
+              OR: [
+                { firstname: { contains: searchTerm, mode: 'insensitive' } },
+                { lastname: { contains: searchTerm, mode: 'insensitive' } },
+              ],
+            },
+          }),
+        }),
+      );
+    });
+  });
+
+  // ───────────────────── findOne ─────────────────────
+
+  describe('findOne', () => {
+    it('should return a verified doctor profile with aggregate rating', async () => {
+      const profileData = {
+        ...mockProfile,
+        verified: true,
+        user: {
+          id: mockDoctorUser.id,
+          firstname: mockDoctorUser.firstname,
+          lastname: mockDoctorUser.lastname,
+          avatar: null as null,
+        },
+      };
+      prisma.doctorProfile.findUnique.mockResolvedValue(profileData);
+      prisma.doctorReview.aggregate.mockResolvedValue({
+        _avg: { rating: 4 },
+        _count: { rating: 3 },
+      });
+
+      const result = await service.findOne(mockProfile.id);
+
+      expect(result.averageRating).toBe(4);
+      expect(result.totalReviews).toBe(3);
+    });
+
+    it('should return null averageRating when no reviews exist', async () => {
+      const profileNoReviews = {
+        ...mockProfile,
+        verified: true,
+        user: {
+          id: mockDoctorUser.id,
+          firstname: mockDoctorUser.firstname,
+          lastname: mockDoctorUser.lastname,
+          avatar: null as null,
+        },
+      };
+      prisma.doctorProfile.findUnique.mockResolvedValue(profileNoReviews);
+      prisma.doctorReview.aggregate.mockResolvedValue({
+        _avg: { rating: null },
+        _count: { rating: 0 },
+      });
+
+      const result = await service.findOne(mockProfile.id);
+
+      expect(result.averageRating).toBeNull();
+      expect(result.totalReviews).toBe(0);
+    });
+
+    it('should throw NotFoundException when profile not found', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+      prisma.doctorReview.aggregate.mockResolvedValue({
+        _avg: { rating: null },
+        _count: { rating: 0 },
+      });
+
+      await expect(service.findOne(999)).rejects.toThrow(NotFoundException);
+    });
+
+    it('should throw NotFoundException when profile is unverified', async () => {
+      const unverified = {
+        ...mockProfile,
+        verified: false,
+        user: {
+          id: mockDoctorUser.id,
+          firstname: mockDoctorUser.firstname,
+          lastname: mockDoctorUser.lastname,
+          avatar: null as null,
+        },
+      };
+      prisma.doctorProfile.findUnique.mockResolvedValue(unverified);
+      prisma.doctorReview.aggregate.mockResolvedValue({
+        _avg: { rating: null },
+        _count: { rating: 0 },
+      });
+
+      await expect(service.findOne(mockProfile.id)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+
+  // ───────────────────── uploadDocument ─────────────────────
+
+  describe('uploadDocument', () => {
+    const mockFile = {
+      filename: 'license.pdf',
+      mimetype: 'application/pdf',
+      toBuffer: jest.fn().mockResolvedValue(Buffer.from('data')),
+      fields: {},
+    } as any;
+
+    const mockDoc = {
+      id: 1,
+      doctorId: 1,
+      type: DocumentTypeEnum.LICENSE,
+      fileUrl: '/uploads/doctor-documents/123-license.pdf',
+      fileName: 'license.pdf',
+      mimeType: 'application/pdf',
+      status: 'PENDING',
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    it('should upload a document for a doctor', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(mockProfile);
+      fileUploadService.uploadFile.mockResolvedValue({
+        url: '/uploads/doctor-documents/123-license.pdf',
+        fileName: 'license.pdf',
+        mimeType: 'application/pdf',
+        key: 'doctor-documents/123-license.pdf',
+      });
+      prisma.doctorDocument.create.mockResolvedValue(mockDoc);
+
+      const result = await service.uploadDocument(
+        mockDoctorUser as any,
+        mockFile,
+        DocumentTypeEnum.LICENSE,
+      );
+
+      expect(result).toEqual(mockDoc);
+      expect(fileUploadService.uploadFile).toHaveBeenCalledWith(
+        mockFile,
+        'doctor-documents',
+      );
+      expect(prisma.doctorDocument.create).toHaveBeenCalledWith({
+        data: {
+          doctorId: mockProfile.id,
+          type: DocumentTypeEnum.LICENSE,
+          fileUrl: '/uploads/doctor-documents/123-license.pdf',
+          fileName: 'license.pdf',
+          mimeType: 'application/pdf',
+        },
+      });
+    });
+
+    it('should throw NotFoundException if doctor has no profile', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.uploadDocument(
+          mockDoctorUser as any,
+          mockFile,
+          DocumentTypeEnum.LICENSE,
+        ),
+      ).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  // ───────────────────── getDocuments ─────────────────────
+
+  describe('getDocuments', () => {
+    it('should return documents for the doctor', async () => {
+      const docs = [
+        {
+          id: 1,
+          doctorId: 1,
+          type: DocumentTypeEnum.LICENSE,
+          fileUrl: '/file.pdf',
+        },
+      ];
+      prisma.doctorProfile.findUnique.mockResolvedValue(mockProfile);
+      prisma.doctorDocument.findMany.mockResolvedValue(docs);
+
+      const result = await service.getDocuments(mockDoctorUser as any);
+
+      expect(result).toEqual(docs);
+      expect(prisma.doctorDocument.findMany).toHaveBeenCalledWith({
+        where: { doctorId: mockProfile.id },
+        orderBy: { createdAt: 'desc' },
+      });
+    });
+
+    it('should throw NotFoundException if doctor has no profile', async () => {
+      prisma.doctorProfile.findUnique.mockResolvedValue(null);
+
+      await expect(service.getDocuments(mockDoctorUser as any)).rejects.toThrow(
+        NotFoundException,
+      );
+    });
+  });
+});

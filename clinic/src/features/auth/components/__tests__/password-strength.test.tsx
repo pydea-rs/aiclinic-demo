@@ -1,0 +1,99 @@
+import { describe, it, expect, vi } from 'vitest';
+import { render, screen, fireEvent } from '../../../../test/test-utils';
+import { AuthForm } from '../AuthForm';
+
+describe('Password strength indicator', () => {
+  const noop = vi.fn().mockResolvedValue(undefined);
+
+  const getStrengthLabel = () => {
+    const candidates = ['Weak', 'Fair', 'Good', 'Strong'];
+    for (const label of candidates) {
+      const el = screen.queryByText(label);
+      if (el) return label;
+    }
+    return null;
+  };
+
+  const switchToRegister = () => {
+    fireEvent.click(screen.getByRole('button', { name: /^register$/i }));
+  };
+
+  const typePassword = (value: string) => {
+    fireEvent.change(screen.getByLabelText(/password/i), { target: { value } });
+  };
+
+  it('should not show strength indicator in login mode', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    typePassword('password123');
+    expect(getStrengthLabel()).toBeNull();
+  });
+
+  it('should not show strength indicator when password is empty', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    expect(getStrengthLabel()).toBeNull();
+  });
+
+  it('should show "Weak" for very short passwords (< 4 chars)', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('ab1');
+    expect(getStrengthLabel()).toBe('Weak');
+  });
+
+  it('should show "Fair" for passwords not meeting server minimum', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('abcdef');
+    expect(getStrengthLabel()).toBe('Fair');
+  });
+
+  it('should show "Fair" for 8+ chars missing uppercase', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('abcdefg1');
+    expect(getStrengthLabel()).toBe('Fair');
+  });
+
+  it('should show "Fair" for 8+ chars missing digit', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('Abcdefgh');
+    expect(getStrengthLabel()).toBe('Fair');
+  });
+
+  it('should show "Good" for 8+ chars with lowercase, uppercase, and digit', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('Abcdefg1');
+    expect(getStrengthLabel()).toBe('Good');
+  });
+
+  it('should show "Good" for 10+ chars meeting minimum', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('Abcdefgh12');
+    expect(getStrengthLabel()).toBe('Good');
+  });
+
+  it('should show "Strong" for 12+ chars with special character', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('Abcdefghij1!');
+    expect(getStrengthLabel()).toBe('Strong');
+  });
+
+  it('should NOT be strong if under 12 chars even with special', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('Abcdefg1!');
+    expect(getStrengthLabel()).toBe('Good');
+  });
+
+  it('should NOT be strong if missing special char even at 12+ chars', () => {
+    render(<AuthForm onLogin={noop} onRegister={noop} />);
+    switchToRegister();
+    typePassword('Abcdefghij12');
+    expect(getStrengthLabel()).toBe('Good');
+  });
+});

@@ -1,0 +1,82 @@
+import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { AppController } from './app.controller';
+import { AppService } from './app.service';
+import { PrismaModule } from './prisma/prisma.module';
+import { ConfigModule } from '@nestjs/config';
+import { UtilsModule } from './utils/utils.module';
+import { AiAgentsModule } from './ai-agents/ai-agents.module';
+import { ApiModule } from './api/api.module';
+import appGeneralConfigs from './configs/general';
+import authConfigs from './configs/auth';
+import aiConfigs from './configs/ai';
+import notificationConfigs from './configs/notification';
+import storageConfigs from './configs/storage';
+import calendlyConfigs from './configs/calendly';
+import { validateEnv } from './configs/env.validation';
+import { AuthModule } from './auth/auth.module';
+import { UserModule } from './user/user.module';
+import { CacheModule } from './cache/cache.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { DoctorModule } from './doctor/doctor.module';
+import { PatientModule } from './patient/patient.module';
+import { SoapModule } from './soap/soap.module';
+import { ReviewModule } from './review/review.module';
+import { ConsultationModule } from './consultation/consultation.module';
+import { SchedulingModule } from './scheduling/scheduling.module';
+import { AdminModule } from './admin/admin.module';
+import { ChatModule } from './chat/chat.module';
+import { MatchingModule } from './matching/matching.module';
+import { NotificationModule } from './notification/notification.module';
+import { PaymentModule } from './payment/payment.module';
+import { CalendlyModule } from './calendly/calendly.module';
+import { NurseModule } from './nurse/nurse.module';
+import { ThrottlerModule } from '@nestjs/throttler';
+import { FastifyThrottlerGuard } from './common/guards/fastify-throttler.guard';
+
+@Module({
+  imports: [
+    PrismaModule,
+    ConfigModule.forRoot({
+      isGlobal: true,
+      load: [
+        appGeneralConfigs,
+        authConfigs,
+        aiConfigs,
+        notificationConfigs,
+        storageConfigs,
+        calendlyConfigs,
+      ],
+      validate: validateEnv,
+    }),
+    CacheModule,
+    UtilsModule,
+    AiAgentsModule,
+    ApiModule,
+    AuthModule,
+    UserModule,
+    ScheduleModule.forRoot(),
+    ThrottlerModule.forRoot({
+      throttlers: [{ ttl: 60000, limit: 100 }],
+    }),
+    DoctorModule,
+    PatientModule,
+    SoapModule,
+    ReviewModule,
+    ConsultationModule,
+    SchedulingModule,
+    AdminModule,
+    ChatModule,
+    MatchingModule,
+    NotificationModule,
+    PaymentModule,
+    CalendlyModule,
+    NurseModule,
+  ],
+  controllers: [AppController],
+  providers: [
+    AppService,
+    { provide: APP_GUARD, useClass: FastifyThrottlerGuard },
+  ],
+})
+export class AppModule {}
