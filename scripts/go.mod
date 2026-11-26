@@ -1,3 +1,3 @@
-module aiclinic-seeder
+module aiclinic_seed
 
-go 1.21
+go 1.27.3

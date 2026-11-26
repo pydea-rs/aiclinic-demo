@@ -122,7 +122,7 @@ RUN cat << 'EOF' > /app/start.sh
 #!/bin/sh
 set -e
 
-# Default port to 8080 if PORT is not set by Render
+# Default port to 8080 if PORT is not set by the platform
 export PORT="${PORT:-8080}"
 echo "==> Configuring Nginx on port ${PORT}..."
 mkdir -p /etc/nginx/conf.d
@@ -134,7 +134,7 @@ npx prisma migrate deploy
 
 if [ "$SEED_DATABASE" = "true" ]; then
     echo "==> Seeding initial platform data..."
-    npx prisma db seed || true
+    npx prisma db seed
 fi
 
 echo "==> Starting NestJS Backend on internal port 3000..."
