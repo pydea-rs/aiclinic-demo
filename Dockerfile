@@ -72,6 +72,8 @@ COPY --from=client-build /app/client/dist /usr/share/nginx/html
 RUN mkdir -p /app/server/uploads
 
 # Configure Nginx template supporting dynamic PORT, WebSockets, and unbuffered SSE
+RUN mkdir -p /etc/nginx/templates
+
 RUN cat << 'EOF' > /etc/nginx/templates/default.conf.template
 server {
     listen ${PORT};
