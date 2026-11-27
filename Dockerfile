@@ -16,8 +16,12 @@ RUN corepack enable && pnpm install --frozen-lockfile
 COPY client/index.html client/vite.config.ts client/tsconfig*.json client/tailwind.config.js client/postcss.config.js ./
 COPY client/src ./src
 
+ARG VITE_APP_NAME=Ai-Clinic-Demo
+ARG VITE_STRIP_AI_GREETING=true
 ENV VITE_API_BASE_URL=/api
 ENV VITE_WS_URL=
+ENV VITE_APP_NAME=${VITE_APP_NAME}
+ENV VITE_STRIP_AI_GREETING=${VITE_STRIP_AI_GREETING}
 
 RUN pnpm run build
 

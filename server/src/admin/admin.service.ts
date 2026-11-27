@@ -45,13 +45,13 @@ export class AdminService {
       where.role = filters.role;
     }
     if (filters.isActive !== undefined) {
-      where.isActive = filters.isActive === 'true';
+      where.isActive = parseBooleanQuery(filters.isActive);
     }
     if (filters.isAdmin !== undefined) {
-      where.isAdmin = filters.isAdmin === 'true';
+      where.isAdmin = parseBooleanQuery(filters.isAdmin);
     }
     if (filters.isBanned !== undefined) {
-      where.isBanned = filters.isBanned === 'true';
+      where.isBanned = parseBooleanQuery(filters.isBanned);
     }
     if (filters.search) {
       where.OR = [
@@ -235,6 +235,7 @@ export class AdminService {
             firstname: true,
             lastname: true,
             email: true,
+            avatar: true,
           },
         },
         documents: { orderBy: { createdAt: 'desc' } },
@@ -387,7 +388,7 @@ export class AdminService {
       bannedUsers,
       totalAppointments,
       newUsersThisMonth,
-      totalRevenue: revenueResult._sum.amount ?? 0,
+      totalRevenue: Number(revenueResult._sum.amount ?? 0),
     };
   }
 
@@ -417,4 +418,9 @@ export class AdminService {
       updatedAt: true,
     } as const;
   }
+}
+
+function parseBooleanQuery(value: string): boolean {
+  const normalized = value.toLowerCase();
+  return normalized === 'true' || normalized === '1';
 }

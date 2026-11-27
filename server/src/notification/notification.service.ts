@@ -10,9 +10,42 @@ import {
   NotificationChannelEnum,
   NotificationTypeEnum,
   PushSubscription,
+  VisitMethodsEnum,
+  VisitTypesEnum,
 } from '@prisma/client';
 import { EmailChannel } from './channels/email.channel';
 import { WebPushChannel } from './channels/web-push.channel';
+
+export interface DoctorDecisionNotificationDetails {
+  doctorName?: string;
+  doctorUserId?: string;
+  doctorDecision?: VisitTypesEnum;
+  visitMethod?: VisitMethodsEnum | null;
+  diagnosis?: string | null;
+  suggestions?: string | null;
+  notes?: string | null;
+}
+
+const VISIT_TYPE_LABELS: Record<VisitTypesEnum, string> = {
+  CONSULTATION: 'Consultation',
+  EXAMINATION: 'Clinical Examination',
+  SURGERY: 'Surgery',
+  LABORATORY: 'Laboratory',
+  RADIOLOGY: 'Radiology',
+  PHARMACY: 'Pharmacy',
+  DENTISTRY: 'Dentistry',
+  THERAPY: 'Therapy',
+  NUTRITION: 'Nutrition',
+  DIRECT_DIAGNOSIS: 'Direct Diagnosis',
+  OTHER: 'Other',
+};
+
+const VISIT_METHOD_LABELS: Record<VisitMethodsEnum, string> = {
+  CHAT: 'Chat',
+  VOICE_CALL: 'Voice Call',
+  VIDEO_CALL: 'Video Call',
+  ON_SITE: 'On-Site',
+};
 
 @Injectable()
 export class NotificationService {
@@ -54,7 +87,7 @@ export class NotificationService {
         await this.pushChannel.send(userId, title, body, data);
       }
 
-      return this.prisma.notification.update({
+      return await this.prisma.notification.update({
         where: { id: notification.id },
         data: { sentAt: new Date() },
       });
@@ -165,18 +198,68 @@ export class NotificationService {
     consultationId: string,
     patientUserId: string,
     accepted: boolean,
+    details?: DoctorDecisionNotificationDetails,
   ): Promise<void> {
-    const title = accepted ? 'Consultation Accepted' : 'Consultation Update';
-    const body = accepted
-      ? 'Your doctor has accepted the consultation. You can proceed with payment.'
-      : 'Your doctor has responded to your consultation request. Please check the details.';
+    if (!details) {
+      const title = accepted ? 'Consultation Accepted' : 'Consultation Update';
+      const body = accepted
+        ? 'Your doctor has accepted the consultation. You can proceed with payment.'
+        : 'Your doctor has responded to your consultation request. Please check the details.';
+
+      await this.send(
+        patientUserId,
+        NotificationTypeEnum.DOCTOR_DECISION,
+        title,
+        body,
+        { consultationId, accepted },
+        NotificationChannelEnum.BOTH,
+      );
+      return;
+    }
+
+    const doctorLabel = details.doctorName
+      ? `Dr. ${details.doctorName}`
+      : 'Your doctor';
+    const decisionLabel = details.doctorDecision
+      ? VISIT_TYPE_LABELS[details.doctorDecision] || details.doctorDecision
+      : 'Consultation';
+    const methodLabel = details.visitMethod
+      ? VISIT_METHOD_LABELS[details.visitMethod] || details.visitMethod
+      : null;
+
+    let title = accepted
+      ? 'Doctor Consultation Decision'
+      : 'Consultation Update';
+    let body =
+      'Your doctor has responded to your consultation request. Please check the details.';
+
+    if (details.doctorDecision === VisitTypesEnum.DIRECT_DIAGNOSIS) {
+      title = 'Consultation Diagnosis Ready';
+      body = `${doctorLabel} reviewed your consultation and provided a final diagnosis and care plan.`;
+    } else if (accepted) {
+      body =
+        details.visitMethod === VisitMethodsEnum.CHAT
+          ? `${doctorLabel} decided on ${decisionLabel} via Chat. Open the notification to view details or start chatting.`
+          : `${doctorLabel} decided on ${decisionLabel}${methodLabel ? ` (${methodLabel})` : ''}. You can now proceed with the next step.`;
+    }
 
     await this.send(
       patientUserId,
       NotificationTypeEnum.DOCTOR_DECISION,
       title,
       body,
-      { consultationId, accepted },
+      {
+        consultationId,
+        accepted,
+        isConsultationDecision: true,
+        doctorName: details.doctorName,
+        doctorUserId: details.doctorUserId,
+        doctorDecision: details.doctorDecision,
+        visitMethod: details.visitMethod ?? null,
+        diagnosis: details.diagnosis ?? null,
+        suggestions: details.suggestions ?? null,
+        notes: details.notes ?? null,
+      },
       NotificationChannelEnum.BOTH,
     );
   }
@@ -435,6 +518,21 @@ export class NotificationService {
       'Doctor Match Accepted',
       `Dr. ${doctorName} has accepted your match request. A consultation has been created.`,
       { consultationId },
+      NotificationChannelEnum.BOTH,
+    );
+  }
+
+  async onAppointmentCancelled(
+    appointmentId: number,
+    recipientUserId: string,
+    dateTime: Date,
+  ): Promise<void> {
+    await this.send(
+      recipientUserId,
+      NotificationTypeEnum.APPOINTMENT_CANCELLED,
+      'Appointment Cancelled',
+      `Your appointment scheduled for ${dateTime.toISOString()} has been cancelled.`,
+      { appointmentId },
       NotificationChannelEnum.BOTH,
     );
   }

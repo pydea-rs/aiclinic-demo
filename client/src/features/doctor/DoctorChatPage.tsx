@@ -6,7 +6,8 @@ import { useAuthStore } from '../../lib/stores/auth.store';
 import { Chat, ChatParticipant } from '../../lib/types/api';
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '../../lib/api/error.utils';
-import { MessageSquare, Search, Loader2, ChevronRight, Users } from 'lucide-react';
+import { UserAvatar } from '../../components/UserAvatar';
+import { MessageSquare, Search, ChevronRight, Users } from 'lucide-react';
 
 type FilterTab = 'all' | 'active';
 
@@ -47,7 +48,15 @@ export const DoctorChatPage: React.FC = () => {
   };
 
   const getOtherParticipant = (chat: Chat) => {
-    if (!chat.participants || !user) return null;
+    if (!user) return null;
+    if (chat.consultation?.patient) {
+      return {
+        ...chat.consultation.patient,
+        role: 'PATIENT' as const,
+        joinedAt: chat.createdAt,
+      };
+    }
+    if (!chat.participants) return null;
     return chat.participants.find((p) => p.id !== user.id);
   };
 
@@ -194,9 +203,14 @@ export const DoctorChatPage: React.FC = () => {
                 <div className="flex items-center gap-4">
                   {/* Avatar */}
                   <div className="relative flex-shrink-0">
-                    <div className="w-12 h-12 bg-gradient-to-br from-brand-500 to-purple-500 rounded-full flex items-center justify-center">
-                      <span className="text-sm font-bold text-white">{initials}</span>
-                    </div>
+                    <UserAvatar
+                      avatar={otherParticipant?.avatar}
+                      firstname={otherParticipant?.firstname}
+                      lastname={otherParticipant?.lastname}
+                      alt={displayName}
+                      fallback={<span className="text-sm font-bold text-white">{initials}</span>}
+                      className="w-12 h-12 bg-gradient-to-br from-brand-500 to-purple-500 rounded-full"
+                    />
                     {isOnline && (
                       <span className="absolute bottom-0 right-0 w-3.5 h-3.5 bg-green-500 border-2 border-white rounded-full" />
                     )}

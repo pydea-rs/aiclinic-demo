@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { matchingApi, patientApi } from '../../api';
@@ -6,6 +6,8 @@ import { Loader2, Search, Zap, FileText, ArrowRight, Stethoscope } from 'lucide-
 import toast from 'react-hot-toast';
 import { DoctorSpecialty, TriageLevel } from '../../lib/types/api';
 import { formatSpecialty } from '../../lib/format';
+import { getErrorMessage } from '../../lib/api/error.utils';
+import { queryClient } from '../../lib/queryClient';
 
 function stripMarkdown(text: string): string {
   return text.replace(/\*\*/g, '').replace(/^[\s-]+/, '').trim();
@@ -39,6 +41,13 @@ export const MatchRequestPage: React.FC = () => {
   const [manualSpecialty, setManualSpecialty] = useState<DoctorSpecialty | ''>('');
   const [mode, setMode] = useState<'soap' | 'manual'>(soapIdParam ? 'soap' : 'manual');
 
+  useEffect(() => {
+    if (soapIdParam) {
+      setSelectedSoapId(soapIdParam);
+      setMode('soap');
+    }
+  }, [soapIdParam]);
+
   const { data: activeMatch, isLoading: checkingActive } = useQuery({
     queryKey: ['matching', 'active'],
     queryFn: matchingApi.getActive,
@@ -49,13 +58,40 @@ export const MatchRequestPage: React.FC = () => {
     queryFn: () => patientApi.getSOAPs(1, 50),
   });
 
+  const soaps = React.useMemo(() => soapsData?.soaps || [], [soapsData?.soaps]);
+
+  const {
+    data: fallbackSoap,
+    isLoading: loadingFallbackSoap,
+    isError: fallbackSoapError,
+  } = useQuery({
+    queryKey: ['soap', selectedSoapId],
+    queryFn: () => patientApi.getSOAPDetail(selectedSoapId),
+    enabled: !!selectedSoapId && !loadingSoaps && !soaps.some(s => s.id === selectedSoapId),
+  });
+
+  useEffect(() => {
+    if (fallbackSoapError && selectedSoapId) {
+      setSelectedSoapId('');
+      toast.error('Selected SOAP note could not be found');
+    }
+  }, [fallbackSoapError, selectedSoapId]);
+
+  const soapOptions = React.useMemo(() => {
+    if (fallbackSoap && !soaps.some(s => s.id === fallbackSoap.id)) {
+      return [fallbackSoap, ...soaps];
+    }
+    return soaps;
+  }, [fallbackSoap, soaps]);
+
   const createMutation = useMutation({
     mutationFn: matchingApi.createRequest,
     onSuccess: (data) => {
+      void queryClient.invalidateQueries({ queryKey: ['matching', 'active'] });
       navigate(`/matching/${data.matchRequest.id}/waiting`, { state: { doctors: data.doctors } });
     },
-    onError: () => {
-      toast.error('Failed to create match request');
+    onError: (error: unknown) => {
+      toast.error(getErrorMessage(error, 'Failed to create match request'));
     },
   });
 
@@ -85,8 +121,7 @@ export const MatchRequestPage: React.FC = () => {
     );
   }
 
-  const soaps = soapsData?.soaps || [];
-  const selectedSoap = soaps.find(s => s.id === selectedSoapId);
+  const selectedSoap = soaps.find(s => s.id === selectedSoapId) ?? fallbackSoap;
 
   const handleSubmit = () => {
     if (mode === 'soap' && selectedSoapId) {
@@ -134,9 +169,9 @@ export const MatchRequestPage: React.FC = () => {
       {mode === 'soap' && (
         <div className="mb-6">
           <label className="block text-sm font-medium text-gray-700 mb-2">Select a SOAP Note</label>
-          {loadingSoaps ? (
+          {loadingSoaps || loadingFallbackSoap ? (
             <div className="flex items-center gap-2 text-gray-500 text-sm"><Loader2 className="w-4 h-4 animate-spin" /> Loading...</div>
-          ) : soaps.length === 0 ? (
+          ) : soapOptions.length === 0 ? (
             <div className="card bg-gray-50/80 p-4 text-center">
               <p className="text-gray-600 text-sm mb-2">No SOAP notes found. Start an AI conversation first.</p>
               <button onClick={() => navigate('/ai/new')} className="text-brand-600 hover:text-brand-700 text-sm font-medium">
@@ -145,7 +180,7 @@ export const MatchRequestPage: React.FC = () => {
             </div>
           ) : (
             <div className="space-y-2 max-h-64 overflow-y-auto">
-              {soaps.map(soap => (
+              {soapOptions.map(soap => (
                 <button
                   key={soap.id}
                   onClick={() => setSelectedSoapId(soap.id)}
@@ -179,7 +214,9 @@ export const MatchRequestPage: React.FC = () => {
                   <span className="text-brand-600">Specialty: {formatSpecialty(selectedSoap.suggestedSpecialty)}</span>
                 )}
                 {triageBadge(selectedSoap.triageLevel)}
-                {!selectedSoap.suggestedSpecialty && <span className="text-gray-500">General practitioner</span>}
+                {!selectedSoap.suggestedSpecialty && (
+                  <span className="text-gray-500">Best available doctor (any specialty)</span>
+                )}
               </div>
             </div>
           )}

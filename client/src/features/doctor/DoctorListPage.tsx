@@ -3,7 +3,15 @@ import { useQuery } from '@tanstack/react-query';
 import { doctorApi } from '../../api';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Loader2, MapPin, Star, Search, FileText } from 'lucide-react';
-import { formatSpecialty } from '../../lib/format';
+import { formatSpecialty, formatVisitMethod } from '../../lib/format';
+import { UserAvatar } from '../../components/UserAvatar';
+import type { DoctorSpecialty } from '../../lib/types/api';
+
+const SPECIALTIES: DoctorSpecialty[] = [
+  'CARDIOLOGY', 'DERMATOLOGY', 'ENT', 'GASTROENTEROLOGY', 'GYNECOLOGY',
+  'NEUROLOGY', 'ONCOLOGY', 'ORTHOPEDICS', 'PEDIATRICS', 'PSYCHIATRY',
+  'UROLOGY', 'GENERAL', 'OTHER',
+];
 
 export const DoctorListPage: React.FC = () => {
   const [searchParams] = useSearchParams();
@@ -78,16 +86,19 @@ export const DoctorListPage: React.FC = () => {
 
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Specialty</label>
-              <input
-                type="text"
+              <select
                 value={specialty}
                 onChange={(e) => {
                   setSpecialty(e.target.value);
                   setPage(1);
                 }}
-                placeholder="e.g., Cardiology"
                 className="w-full px-4 py-2 input-focus"
-              />
+              >
+                <option value="">All Specialties</option>
+                {SPECIALTIES.map((s) => (
+                  <option key={s} value={s}>{formatSpecialty(s)}</option>
+                ))}
+              </select>
             </div>
 
             <div>
@@ -166,11 +177,14 @@ export const DoctorListPage: React.FC = () => {
                       <div className="p-6">
                         <div className="flex items-start justify-between mb-4">
                           <div className="flex items-center gap-3">
-                            <div className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 flex items-center justify-center text-white font-bold text-lg ring-2 ring-brand-200/50 flex-shrink-0">
-                              {doctor.user
-                                ? `${doctor.user.firstname?.[0] || ''}${doctor.user.lastname?.[0] || ''}`
-                                : doctor.specialty?.[0] || 'D'}
-                            </div>
+                            <UserAvatar
+                              avatar={doctor.user?.avatar}
+                              firstname={doctor.user?.firstname}
+                              lastname={doctor.user?.lastname}
+                              alt={doctor.user ? `Dr. ${doctor.user.firstname} ${doctor.user.lastname}` : doctor.specialty}
+                              fallback={!doctor.user ? (doctor.specialty?.[0] || 'D') : undefined}
+                              className="w-12 h-12 rounded-full bg-gradient-to-br from-brand-400 to-brand-600 text-white font-bold text-lg ring-2 ring-brand-200/50 flex-shrink-0"
+                            />
                             <div>
                               <h3 className="font-bold text-lg text-gray-900">
                                 Dr. {doctor.user ? `${doctor.user.firstname} ${doctor.user.lastname}` : doctor.specialty}
@@ -228,7 +242,7 @@ export const DoctorListPage: React.FC = () => {
                                 key={method}
                                 className="badge badge-blue"
                               >
-                                {method}
+                                {formatVisitMethod(method)}
                               </span>
                             ))}
                           </div>

@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { Virtuoso, VirtuosoHandle } from 'react-virtuoso';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
 import { chatApi } from '../../api';
 import { socketService } from '../../lib/socket/socket.service';
 import { useAuthStore } from '../../lib/stores/auth.store';
 import { Chat, ChatParticipant, Message } from '../../lib/types/api';
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '../../lib/api/error.utils';
+import { getMessageDirection } from '../../lib/text-direction';
+import { UserAvatar } from '../../components/UserAvatar';
 
 interface TypingUser {
   userId: string;
@@ -30,8 +32,9 @@ export const ChatRoomPage: React.FC = () => {
   const virtuosoRef = useRef<VirtuosoHandle>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const lastTypingStateRef = useRef<boolean>(false);
+  const deliveryTimeoutsRef = useRef<Map<string, NodeJS.Timeout>>(new Map());
 
-  const loadChatAndMessages = useCallback(async () => {
+  const loadChatAndMessages = useCallback(async (isCancelled: () => boolean) => {
     if (!id) return;
 
     try {
@@ -39,6 +42,7 @@ export const ChatRoomPage: React.FC = () => {
         chatApi.getById(id),
         chatApi.getMessages(id, { limit: 100 })
       ]);
+      if (isCancelled()) return;
 
       setChatInfo(chatData);
       // Keep what arrived over the socket while the history was loading.
@@ -49,9 +53,13 @@ export const ChatRoomPage: React.FC = () => {
         ...prev.filter(m => m.chatId === id && !loaded.has(String(m.id))),
       ]);
     } catch (error: unknown) {
-      toast.error(getErrorMessage(error, 'Failed to load chat'));
+      if (!isCancelled()) {
+        toast.error(getErrorMessage(error, 'Failed to load chat'));
+      }
     } finally {
-      setLoading(false);
+      if (!isCancelled()) {
+        setLoading(false);
+      }
     }
   }, [id]);
 
@@ -59,8 +67,15 @@ export const ChatRoomPage: React.FC = () => {
     if (!id) return;
 
     let cancelled = false;
+    setLoading(true);
+    setMessages([]);
+    setChatInfo(null);
+    setTypingUsers([]);
+    setPresence(new Map());
+    setEditingMessageId(null);
+    setEditContent('');
 
-    loadChatAndMessages();
+    void loadChatAndMessages(() => cancelled);
 
     const socket = socketService.connect();
 
@@ -71,6 +86,7 @@ export const ChatRoomPage: React.FC = () => {
     const handleNewMessage = (data: { message: Message }) => {
       if (cancelled) return;
       if (data?.message?.chatId === id) {
+        let matchedTempId: string | null = null;
         setMessages(prev => {
           if (prev.some(m => String(m.id) === String(data.message.id))) {
             return prev;
@@ -81,6 +97,7 @@ export const ChatRoomPage: React.FC = () => {
               String(m.id).startsWith('temp-') && m.senderId === user?.id && m.content === data.message.content
             );
             if (optimisticIdx !== -1) {
+              matchedTempId = String(prev[optimisticIdx].id);
               const updated = [...prev];
               updated[optimisticIdx] = data.message;
               return updated;
@@ -89,6 +106,14 @@ export const ChatRoomPage: React.FC = () => {
           return [...prev, data.message];
         });
 
+        if (matchedTempId) {
+          const timer = deliveryTimeoutsRef.current.get(matchedTempId);
+          if (timer) {
+            clearTimeout(timer);
+            deliveryTimeoutsRef.current.delete(matchedTempId);
+          }
+        }
+
         if (data.message.senderId !== user?.id) {
           socketService.markAsRead(id, String(data.message.id));
         }
@@ -96,8 +121,9 @@ export const ChatRoomPage: React.FC = () => {
     };
 
     // Listen for typing indicators
-    const handleTyping = (data: { userId: string; isTyping: boolean; firstname?: string }) => {
+    const handleTyping = (data: { chatId?: string; userId: string; isTyping: boolean; firstname?: string }) => {
       if (cancelled) return;
+      if (data.chatId && data.chatId !== id) return;
       if (data.userId !== user?.id) {
         setTypingUsers(prev => {
           if (data.isTyping) {
@@ -114,6 +140,7 @@ export const ChatRoomPage: React.FC = () => {
 
     // Listen for read receipts
     const handleRead = (data: { chatId: string; messageId: string; userId: string }) => {
+      if (cancelled) return;
       if (data.chatId === id) {
         setMessages(prev => prev.map(msg => {
           if (String(msg.id) === String(data.messageId)) {
@@ -132,6 +159,7 @@ export const ChatRoomPage: React.FC = () => {
 
     // Listen for message edits
     const handleEdited = (data: { message: Message }) => {
+      if (cancelled) return;
       if (data?.message?.chatId === id) {
         setMessages(prev => prev.map(msg =>
           String(msg.id) === String(data.message.id)
@@ -143,6 +171,7 @@ export const ChatRoomPage: React.FC = () => {
 
     // Listen for message deletes
     const handleDeleted = (data: { message: Message }) => {
+      if (cancelled) return;
       if (data?.message?.chatId === id) {
         setMessages(prev => prev.map(msg =>
           String(msg.id) === String(data.message.id)
@@ -154,7 +183,13 @@ export const ChatRoomPage: React.FC = () => {
 
     // Listen for presence events
     const handleUserOnline = (data: { userId: string; isOnline?: boolean }) => {
+      if (cancelled) return;
       setPresence(prev => new Map(prev).set(data.userId, data.isOnline !== false));
+    };
+
+    const handleChatError = (data: { event?: string; message?: string }) => {
+      if (cancelled) return;
+      toast.error(data?.message || 'Chat action failed');
     };
 
     socket.on('chat:message', handleNewMessage);
@@ -163,11 +198,13 @@ export const ChatRoomPage: React.FC = () => {
     socket.on('chat:edited', handleEdited);
     socket.on('chat:deleted', handleDeleted);
     socket.on('user:online', handleUserOnline);
+    socket.on('chat:error', handleChatError);
 
     const unsubStatus = socketService.onStatusChange((status) => {
-      setSocketConnected(status.connected);
+      if (!cancelled) setSocketConnected(status.connected);
     });
 
+    const deliveryTimeouts = deliveryTimeoutsRef.current;
     return () => {
       cancelled = true;
       socketService.leaveRoom(id);
@@ -178,12 +215,18 @@ export const ChatRoomPage: React.FC = () => {
         typingTimeoutRef.current = null;
       }
 
+      for (const timer of deliveryTimeouts.values()) {
+        clearTimeout(timer);
+      }
+      deliveryTimeouts.clear();
+
       socket.off('chat:message', handleNewMessage);
       socket.off('chat:typing', handleTyping);
       socket.off('chat:read', handleRead);
       socket.off('chat:edited', handleEdited);
       socket.off('chat:deleted', handleDeleted);
       socket.off('user:online', handleUserOnline);
+      socket.off('chat:error', handleChatError);
     };
   }, [id, user?.id, loadChatAndMessages]);
 
@@ -216,7 +259,7 @@ export const ChatRoomPage: React.FC = () => {
   };
 
   const handleSend = async () => {
-    if (!content.trim() || !id || !user) return;
+    if (!content.trim() || !id || !user || chatInfo?.closedAt) return;
 
     const trimmed = content.trim();
     handleTyping(false);
@@ -226,6 +269,13 @@ export const ChatRoomPage: React.FC = () => {
       id: tempId,
       chatId: id,
       senderId: user.id,
+      sender: {
+        id: user.id,
+        firstname: user.firstname,
+        lastname: user.lastname,
+        avatar: user.avatar,
+        role: user.role,
+      },
       content: trimmed,
       type: 'TEXT',
       createdAt: new Date().toISOString(),
@@ -244,16 +294,19 @@ export const ChatRoomPage: React.FC = () => {
     socketService.sendMessage(id, trimmed);
 
     // Remove optimistic message if server never confirms within 10s
-    setTimeout(() => {
+    const timer = setTimeout(() => {
+      deliveryTimeoutsRef.current.delete(tempId);
+      let wasUnconfirmed = false;
       setMessages(prev => {
-        const stillTemp = prev.some(m => m.id === tempId);
-        if (stillTemp) {
-          toast.error('Message may not have been delivered');
-          return prev.filter(m => m.id !== tempId);
-        }
-        return prev;
+        if (!prev.some(m => m.id === tempId)) return prev;
+        wasUnconfirmed = true;
+        return prev.filter(m => m.id !== tempId);
       });
+      if (wasUnconfirmed) {
+        toast.error('Message may not have been delivered');
+      }
     }, 10000);
+    deliveryTimeoutsRef.current.set(tempId, timer);
   };
 
   const handleEdit = (message: Message) => {
@@ -263,12 +316,15 @@ export const ChatRoomPage: React.FC = () => {
 
   const handleSaveEdit = async () => {
     if (!editContent.trim() || !id || editingMessageId === null) return;
+    if (!socketService.isConnected()) {
+      toast.error('Not connected — message not edited');
+      return;
+    }
 
     try {
       socketService.editMessage(id, editingMessageId, editContent.trim());
       setEditingMessageId(null);
       setEditContent('');
-      toast.success('Message edited');
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, 'Failed to edit message'));
     }
@@ -276,17 +332,50 @@ export const ChatRoomPage: React.FC = () => {
 
   const handleDelete = async (messageId: string) => {
     if (!id || !confirm('Are you sure you want to delete this message?')) return;
+    if (!socketService.isConnected()) {
+      toast.error('Not connected — message not deleted');
+      return;
+    }
 
     try {
       socketService.deleteMessage(id, messageId);
-      toast.success('Message deleted');
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, 'Failed to delete message'));
     }
   };
 
   const getOtherParticipant = () => {
-    if (!chatInfo?.participants || !user) return null;
+    if (!user) return null;
+    if (chatInfo?.consultation) {
+      if (user.role === 'PATIENT' && chatInfo.consultation.doctor?.user) {
+        const docParticipant = chatInfo.participants?.find(
+          (p) => p.id === chatInfo.consultation?.doctor?.userId,
+        );
+        return (
+          docParticipant || {
+            ...chatInfo.consultation.doctor.user,
+            role: 'DOCTOR' as const,
+            joinedAt: chatInfo.createdAt,
+          }
+        );
+      }
+      if (
+        (user.role === 'DOCTOR' || user.role === 'NURSE') &&
+        chatInfo.consultation.patient
+      ) {
+        const patientParticipant = chatInfo.participants?.find(
+          (p) => p.id === chatInfo.consultation?.patientId,
+        );
+        return (
+          patientParticipant || {
+            ...chatInfo.consultation.patient,
+            role: 'PATIENT' as const,
+            joinedAt: chatInfo.createdAt,
+          }
+        );
+      }
+    }
+    if (!chatInfo?.participants) return null;
     return chatInfo.participants.find((p) => p.id !== user.id);
   };
 
@@ -358,6 +447,9 @@ export const ChatRoomPage: React.FC = () => {
 
   const otherParticipant = getOtherParticipant();
   const isOnline = otherParticipant ? isParticipantOnline(otherParticipant) : false;
+  const isClosed = Boolean(chatInfo?.closedAt);
+  const chatListPath =
+    user?.role === 'DOCTOR' ? '/doctor/chat' : user?.role === 'NURSE' ? '/nurse/chat' : '/chat';
 
   return (
     <div className="flex flex-col h-full bg-gray-50 animate-fade-in">
@@ -365,17 +457,41 @@ export const ChatRoomPage: React.FC = () => {
       <div className="glass shadow-soft px-6 py-4 flex items-center justify-between animate-slide-in-down">
         <div className="flex items-center gap-4">
           <button
-            onClick={() => navigate('/chat')}
+            onClick={() => navigate(chatListPath)}
             className="btn-press text-gray-500 hover:text-gray-800 transition-colors"
           >
             ← Back
           </button>
+          {otherParticipant && (
+            <UserAvatar
+              avatar={otherParticipant.avatar}
+              firstname={otherParticipant.firstname}
+              lastname={otherParticipant.lastname}
+              alt={`${otherParticipant.firstname} ${otherParticipant.lastname}`}
+              className="w-10 h-10 bg-gradient-to-br from-brand-500 to-purple-500 rounded-full text-sm font-bold text-white flex-shrink-0"
+            />
+          )}
           <div>
-            <h1 className="text-xl font-bold text-gray-900">
-              {chatInfo?.topic || (otherParticipant
-                ? `${otherParticipant.firstname} ${otherParticipant.lastname}`
-                : 'Chat')}
-            </h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-xl font-bold text-gray-900">
+                {chatInfo?.topic || (otherParticipant
+                  ? `${otherParticipant.firstname} ${otherParticipant.lastname}`
+                  : 'Chat')}
+              </h1>
+              {user?.role === 'NURSE' && chatInfo?.consultation?.doctor?.user && (
+                <span className="badge badge-purple text-[11px]">
+                  Dr. {chatInfo.consultation.doctor.user.lastname}'s team
+                </span>
+              )}
+              {chatInfo?.consultationId && (
+                <Link
+                  to={`/consultation/${chatInfo.consultationId}`}
+                  className="text-xs font-medium text-brand-600 hover:text-brand-700 underline"
+                >
+                  View Consultation
+                </Link>
+              )}
+            </div>
             {isOnline && (
               <p className="text-sm text-green-600 flex items-center gap-1.5 font-medium">
                 <span className="status-dot status-dot-online"></span>
@@ -406,7 +522,7 @@ export const ChatRoomPage: React.FC = () => {
           ref={virtuosoRef}
           data={flatItems}
           followOutput="smooth"
-          initialTopMostItemIndex={flatItems.length - 1}
+          initialTopMostItemIndex={Math.max(0, flatItems.length - 1)}
           className="custom-scrollbar px-6 py-4"
           itemContent={(_index, item) => {
             if (item.type === 'date') {
@@ -423,10 +539,38 @@ export const ChatRoomPage: React.FC = () => {
             const isOwn = msg.senderId === user?.id;
             const isEditing = editingMessageId === msg.id;
             const isDeleted = !!msg.deletedAt;
+            const senderInfo =
+              msg.sender || chatInfo?.participants?.find((p) => p.id === msg.senderId);
+            const consultationDoctorLastname = chatInfo?.consultation?.doctor?.user?.lastname;
+            const isSharedConsultationChat =
+              Boolean(chatInfo?.consultationId) || (chatInfo?.participants?.length ?? 0) > 2;
+            const showSenderHeader =
+              !isOwn && (senderInfo?.role === 'NURSE' || isSharedConsultationChat);
+            const direction = getMessageDirection(msg.content);
 
             return (
               <div className={`flex mb-4 animate-msg-in ${isOwn ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-md ${isOwn ? 'items-end' : 'items-start'} flex flex-col`}>
+                  {showSenderHeader && senderInfo && (
+                    <div className="flex items-center gap-1.5 mb-1 px-1">
+                      <span className="text-xs font-semibold text-gray-600">
+                        {senderInfo.role === 'DOCTOR' ? 'Dr. ' : ''}
+                        {senderInfo.firstname} {senderInfo.lastname}
+                      </span>
+                      {senderInfo.role === 'NURSE' && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-100">
+                          {consultationDoctorLastname
+                            ? `Nurse · Dr. ${consultationDoctorLastname}'s team`
+                            : 'Nurse'}
+                        </span>
+                      )}
+                      {senderInfo.role === 'DOCTOR' && (
+                        <span className="px-2 py-0.5 text-[10px] font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-100">
+                          Doctor
+                        </span>
+                      )}
+                    </div>
+                  )}
                   {isEditing ? (
                     <div className="w-full">
                       <input
@@ -462,11 +606,14 @@ export const ChatRoomPage: React.FC = () => {
                     </div>
                   ) : (
                     <>
-                      <div className={`px-4 py-2.5 ${
-                        isOwn
-                          ? 'bg-gradient-to-r from-brand-600 to-brand-500 text-white rounded-2xl rounded-br-md shadow-sm'
-                          : 'bg-white text-gray-800 border border-gray-100 shadow-soft rounded-2xl rounded-bl-md'
-                      } ${isDeleted ? 'opacity-50 italic' : ''} transition-all duration-200 ease-spring`}>
+                      <div
+                        dir={direction}
+                        className={`px-4 py-2.5 ${
+                          isOwn
+                            ? 'bg-gradient-to-r from-brand-600 to-brand-500 text-white rounded-2xl rounded-br-md shadow-sm'
+                            : 'bg-white text-gray-800 border border-gray-100 shadow-soft rounded-2xl rounded-bl-md'
+                        } ${isDeleted ? 'opacity-50 italic' : ''} transition-all duration-200 ease-spring`}
+                      >
                         <p>{msg.content}</p>
                         {msg.editedAt && !isDeleted && (
                           <p className="text-xs opacity-70 mt-1">(edited)</p>
@@ -526,23 +673,29 @@ export const ChatRoomPage: React.FC = () => {
 
       {/* Input */}
       <div className="glass border-t-0 shadow-soft-lg px-6 py-4">
-        <div className="flex gap-3">
-          <input
-            type="text"
-            value={content}
-            onChange={(e) => handleContentChange(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
-            className="flex-1 input-focus px-4 py-2.5 border"
-            placeholder="Type a message..."
-          />
-          <button
-            onClick={handleSend}
-            disabled={!content.trim()}
-            className="btn-primary px-6 py-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            Send
-          </button>
-        </div>
+        {isClosed ? (
+          <p className="text-sm text-center text-gray-500 py-1">
+            This conversation has been closed.
+          </p>
+        ) : (
+          <div className="flex gap-3">
+            <input
+              type="text"
+              value={content}
+              onChange={(e) => handleContentChange(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !e.shiftKey && handleSend()}
+              className="flex-1 input-focus px-4 py-2.5 border"
+              placeholder="Type a message..."
+            />
+            <button
+              onClick={handleSend}
+              disabled={!content.trim()}
+              className="btn-primary px-6 py-2.5 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Send
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

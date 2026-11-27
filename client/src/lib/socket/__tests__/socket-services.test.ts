@@ -9,6 +9,11 @@ const { mockIo } = vi.hoisted(() => ({
     emit: vi.fn(),
     removeAllListeners: vi.fn(),
     disconnect: vi.fn(),
+    io: {
+      on: vi.fn(),
+      off: vi.fn(),
+      removeAllListeners: vi.fn(),
+    },
   })),
 }));
 
@@ -182,6 +187,30 @@ describe('socket services', () => {
       fire(errorEvent, { message });
 
       await expect(answer).rejects.toThrow(message);
+      expect(listening('match:accepted')).toBe(0);
+    });
+
+    it.each(['match:offer_expired', 'match:cancelled', 'match:timeout'])(
+      'should reject immediately when offer is withdrawn via %s',
+      async (withdrawnEvent) => {
+        const { fire, listening } = connectMatching();
+        const id = requestId();
+
+        const answer = matchingSocket.acceptMatch(id);
+        fire(withdrawnEvent, { matchRequestId: id });
+
+        await expect(answer).rejects.toThrow('no longer available');
+        expect(listening('match:accepted')).toBe(0);
+        expect(listening(withdrawnEvent)).toBe(0);
+      },
+    );
+
+    it('should reject immediately when socket disconnects mid-answer', async () => {
+      const { fire, listening } = connectMatching();
+      const answer = matchingSocket.acceptMatch(requestId());
+      fire('disconnect', {});
+
+      await expect(answer).rejects.toThrow('Disconnected');
       expect(listening('match:accepted')).toBe(0);
     });
 

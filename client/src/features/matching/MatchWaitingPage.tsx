@@ -5,10 +5,12 @@ import { matchingApi } from '../../api';
 import { matchingSocket } from '../../lib/socket/matching.socket';
 import { Loader2, Search, CheckCircle, XCircle, Clock, UserCheck, ArrowRight, X } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { ScoredDoctor, MatchRequest } from '../../lib/types/api';
+import { ScoredDoctor } from '../../lib/types/api';
 import { formatSpecialty } from '../../lib/format';
+import { UserAvatar } from '../../components/UserAvatar';
 
 const MATCH_TIMEOUT_SECONDS = 300;
+const TERMINAL_STATUSES = ['CONSULTATION_CREATED', 'TIMEOUT', 'MANUAL_BROWSE', 'CANCELLED'];
 
 export const MatchWaitingPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
@@ -21,11 +23,14 @@ export const MatchWaitingPage: React.FC = () => {
   const [wsStatus, setWsStatus] = useState<string>('');
   const timerRef = useRef<ReturnType<typeof setInterval>>();
 
-  const { data: matchRequest, refetch } = useQuery({
+  const { data: matchRequest, isError, refetch } = useQuery({
     queryKey: ['matching', 'status', id],
     queryFn: () => matchingApi.getStatus(id!),
     enabled: !!id,
-    refetchInterval: 5000,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && TERMINAL_STATUSES.includes(status) ? false : 5000;
+    },
   });
 
   useEffect(() => {
@@ -37,6 +42,8 @@ export const MatchWaitingPage: React.FC = () => {
 
       if (event === 'match:searching') {
         setWsStatus(`Searching among ${data.candidates} doctors...`);
+      } else if (event === 'match:offered') {
+        void refetch();
       } else if (event === 'match:accepted') {
         toast.success('A doctor accepted your request!');
         void refetch();
@@ -49,7 +56,7 @@ export const MatchWaitingPage: React.FC = () => {
       }
     };
 
-    const handlers = ['match:searching', 'match:accepted', 'match:timeout', 'match:cancelled'].map(evt => {
+    const handlers = ['match:searching', 'match:offered', 'match:accepted', 'match:timeout', 'match:cancelled'].map(evt => {
       const handler = makeHandler(evt);
       matchingSocket.on(evt, handler);
       return { evt, handler };
@@ -62,8 +69,10 @@ export const MatchWaitingPage: React.FC = () => {
     };
   }, [id, refetch]);
 
+  const isTerminal = Boolean(matchRequest?.status && TERMINAL_STATUSES.includes(matchRequest.status));
+
   useEffect(() => {
-    if (!matchRequest?.createdAt) return;
+    if (!matchRequest?.createdAt || isTerminal) return;
     const createdMs = new Date(matchRequest.createdAt).getTime();
     if (isNaN(createdMs)) return;
 
@@ -76,7 +85,7 @@ export const MatchWaitingPage: React.FC = () => {
     timerRef.current = setInterval(tick, 1000);
 
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
-  }, [matchRequest?.createdAt]);
+  }, [matchRequest?.createdAt, isTerminal]);
 
   const handleCancel = async () => {
     if (!id) return;
@@ -93,12 +102,35 @@ export const MatchWaitingPage: React.FC = () => {
     if (!id) return;
     try {
       await matchingApi.browse(id);
+      void queryClient.invalidateQueries({ queryKey: ['matching'] });
       const specialty = matchRequest?.specialty;
       navigate(`/doctors${specialty ? `?specialty=${specialty}` : ''}`);
     } catch {
       toast.error('Failed to switch to browsing');
     }
   };
+
+  if (isError) {
+    return (
+      <div className="max-w-lg mx-auto p-6 mt-12 animate-scale-in">
+        <div className="card p-8 text-center">
+          <div className="w-16 h-16 bg-red-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <XCircle className="w-8 h-8 text-red-500" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Match Request Unavailable</h2>
+          <p className="text-gray-600 mb-4">We could not load the status of this match request.</p>
+          <div className="flex gap-3 justify-center">
+            <button onClick={() => void refetch()} className="btn-primary px-5 py-2.5">
+              Retry
+            </button>
+            <button onClick={() => navigate('/dashboard')} className="btn-secondary px-5 py-2.5">
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   if (!matchRequest) {
     return (
@@ -112,7 +144,6 @@ export const MatchWaitingPage: React.FC = () => {
   const minutes = Math.floor(remaining / 60);
   const seconds = remaining % 60;
   const progress = Math.min(100, (elapsed / MATCH_TIMEOUT_SECONDS) * 100);
-  const isTerminal = ['CONSULTATION_CREATED', 'TIMEOUT', 'MANUAL_BROWSE', 'CANCELLED'].includes(matchRequest.status);
 
   if (matchRequest.status === 'CONSULTATION_CREATED' && matchRequest.consultationId) {
     return (
@@ -158,6 +189,31 @@ export const MatchWaitingPage: React.FC = () => {
               onClick={() => navigate('/dashboard')}
               className="btn-secondary px-5 py-2.5"
             >
+              Back to Dashboard
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (matchRequest.status === 'MANUAL_BROWSE') {
+    return (
+      <div className="max-w-lg mx-auto p-6 mt-12 animate-scale-in">
+        <div className="card p-8 text-center">
+          <div className="w-16 h-16 bg-brand-50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Search className="w-8 h-8 text-brand-600" />
+          </div>
+          <h2 className="text-xl font-bold text-gray-900 mb-2">Switched to Manual Browse</h2>
+          <p className="text-gray-600 mb-6">Browse verified doctors directly to schedule your consultation.</p>
+          <div className="flex gap-3 justify-center">
+            <button
+              onClick={() => navigate(`/doctors${matchRequest.specialty ? `?specialty=${matchRequest.specialty}` : ''}`)}
+              className="btn-primary px-5 py-2.5 inline-flex items-center gap-2"
+            >
+              <Search className="w-4 h-4" /> Browse Doctors
+            </button>
+            <button onClick={() => navigate('/dashboard')} className="btn-secondary px-5 py-2.5">
               Back to Dashboard
             </button>
           </div>
@@ -234,9 +290,14 @@ export const MatchWaitingPage: React.FC = () => {
         {matchRequest.status === 'MATCHED' && matchRequest.matchedDoctor && (
           <div className="px-6 py-4 border-b border-gray-100 bg-brand-50/50">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-brand-100 to-brand-50 rounded-xl flex items-center justify-center ring-1 ring-brand-200/50">
-                <UserCheck className="w-5 h-5 text-brand-700" />
-              </div>
+              <UserAvatar
+                avatar={matchRequest.matchedDoctor.user.avatar}
+                firstname={matchRequest.matchedDoctor.user.firstname}
+                lastname={matchRequest.matchedDoctor.user.lastname}
+                alt={`Dr. ${matchRequest.matchedDoctor.user.firstname} ${matchRequest.matchedDoctor.user.lastname}`}
+                fallback={<UserCheck className="w-5 h-5 text-brand-700" />}
+                className="w-10 h-10 bg-gradient-to-br from-brand-100 to-brand-50 rounded-xl ring-1 ring-brand-200/50 flex-shrink-0"
+              />
               <div>
                 <div className="font-semibold text-sm text-gray-900">
                   Dr. {matchRequest.matchedDoctor.user.firstname} {matchRequest.matchedDoctor.user.lastname}
@@ -248,27 +309,47 @@ export const MatchWaitingPage: React.FC = () => {
         )}
 
         {/* Scored doctors list */}
-        {doctors.length > 0 && matchRequest.status === 'SEARCHING' && (
-          <div className="px-6 py-4 border-b border-gray-100">
-            <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Top Candidates</div>
-            <div className="space-y-2">
-              {doctors.slice(0, 5).map(doc => (
-                <div key={doc.doctorId} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-gray-50 transition-colors">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-7 h-7 bg-brand-50 rounded-lg flex items-center justify-center text-xs font-bold text-brand-600 ring-1 ring-brand-100">
-                      {doc.firstname[0]}{doc.lastname[0]}
+        {(() => {
+          const queuedDoctors =
+            matchRequest.status === 'MATCHED' && matchRequest.matchedDoctorId
+              ? doctors.filter((d) => d.doctorId !== matchRequest.matchedDoctorId)
+              : doctors;
+          if (
+            queuedDoctors.length === 0 ||
+            (matchRequest.status !== 'SEARCHING' && matchRequest.status !== 'MATCHED')
+          ) {
+            return null;
+          }
+          return (
+            <div className="px-6 py-4 border-b border-gray-100">
+              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                {matchRequest.status === 'MATCHED' ? 'Next in Queue' : 'Top Candidates'}
+              </div>
+              <div className="space-y-2">
+                {queuedDoctors.slice(0, 5).map((doc) => (
+                  <div key={doc.doctorId} className="flex items-center justify-between text-sm p-2 rounded-lg hover:bg-gray-50 transition-colors">
+                    <div className="flex items-center gap-2.5">
+                      <UserAvatar
+                        avatar={doc.avatar}
+                        firstname={doc.firstname}
+                        lastname={doc.lastname}
+                        alt={`Dr. ${doc.firstname} ${doc.lastname}`}
+                        className="w-7 h-7 bg-brand-50 rounded-lg text-xs font-bold text-brand-600 ring-1 ring-brand-100 flex-shrink-0"
+                      />
+                      <span className="text-gray-700 font-medium">Dr. {doc.firstname} {doc.lastname}</span>
                     </div>
-                    <span className="text-gray-700 font-medium">Dr. {doc.firstname} {doc.lastname}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-gray-400">{formatSpecialty(doc.specialty)}</span>
+                      <span className="text-xs font-semibold text-brand-600">
+                        {Math.min(100, Math.round(doc.score))}%
+                      </span>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-gray-400">{formatSpecialty(doc.specialty)}</span>
-                    <span className="text-xs font-semibold text-brand-600">{Math.round(doc.score)}%</span>
-                  </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {/* Info */}
         <div className="px-6 py-4 text-center">

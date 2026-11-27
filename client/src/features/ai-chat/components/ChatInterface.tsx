@@ -6,6 +6,7 @@ import { TypingIndicator } from './TypingIndicator';
 import { MessageInput } from './MessageInput';
 import { SOAPReadyBanner } from './SOAPReadyBanner';
 import { useChat } from '../hooks/useChat';
+import { useAuthStore } from '../../../lib/stores/auth.store';
 import { soapApi } from '../../../api';
 import { queryClient } from '../../../lib/queryClient';
 import { Loader2, RefreshCw, Stethoscope, Heart, Brain, Thermometer, Pill, ArrowDown } from 'lucide-react';
@@ -18,6 +19,7 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ forceNew }) => {
   const { conversationId: routeConversationId } = useParams<{ conversationId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
+  const user = useAuthStore((s) => s.user);
 
   const {
     messages,
@@ -52,11 +54,13 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ forceNew }) => {
       setSoapData({ id: data.soapId });
     }
     void queryClient.invalidateQueries({ queryKey: ['ai-conversations'] });
+    void queryClient.invalidateQueries({ queryKey: ['soaps'] });
+    void queryClient.invalidateQueries({ queryKey: ['soaps-recent'] });
   }, []);
 
   const handleNewChat = useCallback(() => {
     setSoapData(null);
-    if (location.pathname === '/ai/new') {
+    if (location.pathname === '/ai/new' || location.pathname === '/ai') {
       resetChat();
     } else {
       navigate('/ai/new');
@@ -90,6 +94,31 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ forceNew }) => {
   useEffect(() => {
     initializeChat();
   }, [initializeChat]);
+
+  useEffect(() => {
+    setSoapData(null);
+    if (!routeConversationId || conversationId !== routeConversationId) return;
+
+    let cancelled = false;
+    soapApi
+      .getByConversation(conversationId)
+      .then((soap) => {
+        if (cancelled || !soap) return;
+        setSoapData({
+          id: soap.id,
+          assessment: soap.assessment,
+          suggestedSpecialty: soap.suggestedSpecialty,
+          triageLevel: soap.triageLevel,
+        });
+      })
+      .catch(() => {
+        // existing SOAP lookup is best-effort for resumed chats
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [routeConversationId, conversationId]);
 
   // Loading / error state
   if (!conversationId) {
@@ -205,6 +234,10 @@ export const ChatInterface: React.FC<ChatInterfaceProps> = ({ forceNew }) => {
           suggestedSpecialty={soapData.suggestedSpecialty}
           triageLevel={soapData.triageLevel}
           onFindDoctor={() => {
+            if (user?.role === 'PATIENT') {
+              navigate(`/matching/request?soapId=${soapData.id}`);
+              return;
+            }
             const params = new URLSearchParams();
             if (soapData.suggestedSpecialty) params.set('specialty', soapData.suggestedSpecialty);
             params.set('soapId', soapData.id);

@@ -4,6 +4,7 @@ import { useAuthStore } from '../lib/stores/auth.store';
 import { authApi } from '../api';
 import { queryClient } from '../lib/queryClient';
 import { socketService } from '../lib/socket/socket.service';
+import { matchingSocket } from '../lib/socket/matching.socket';
 import {
   Home,
   Bot,
@@ -29,6 +30,7 @@ import {
 import { NotificationBell } from '../features/notification/NotificationBell';
 import { ThemeCustomizer } from './ThemeCustomizer';
 import { ProfileModal } from './ProfileModal';
+import { UserAvatar } from './UserAvatar';
 import { useNurseAssignments } from '../features/nurse/useNurseAssignments';
 import { NurseInvitationsBanner } from '../features/nurse/NurseInvitationsBanner';
 
@@ -56,17 +58,45 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
   const [showProfile, setShowProfile] = React.useState(false);
 
   const role = user?.role || 'NONE';
-  const isAdmin = user?.isAdmin || false;
+  const isAdmin = Boolean(user?.isAdmin || user?.isSuperAdmin);
   const isDoctor = role === 'DOCTOR';
   const isNurse = role === 'NURSE';
 
   const { assignments: nurseAssignments } = useNurseAssignments();
+
+  React.useEffect(() => {
+    if (!isAuthenticated || !isDoctor) return;
+
+    matchingSocket.connect();
+    const syncMatchingQueries = () => {
+      void queryClient.invalidateQueries({ queryKey: ['matching', 'pending'] });
+      void queryClient.invalidateQueries({ queryKey: ['doctor-stats'] });
+    };
+
+    const events = [
+      'match:request',
+      'match:cancelled',
+      'match:timeout',
+      'match:offer_expired',
+    ];
+    for (const evt of events) {
+      matchingSocket.on(evt, syncMatchingQueries);
+    }
+
+    return () => {
+      for (const evt of events) {
+        matchingSocket.off(evt, syncMatchingQueries);
+      }
+      matchingSocket.disconnect();
+    };
+  }, [isAuthenticated, isDoctor]);
 
   const handleLogout = async () => {
     try {
       await authApi.logout();
     } finally {
       socketService.disconnect();
+      matchingSocket.disconnect();
       queryClient.clear();
       clearAuth();
     }
@@ -363,9 +393,14 @@ export const Shell: React.FC<ShellProps> = ({ children }) => {
                     className="w-full flex items-center gap-3 px-3 py-3 mb-1 rounded-xl bg-gray-50/50 dark:bg-slate-800/50 hover:bg-gray-100/60 dark:hover:bg-slate-700/60 transition-colors duration-200 text-left cursor-pointer">
                     {/* Avatar with online dot */}
                     <div className="relative flex-shrink-0">
-                      <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-100 to-brand-50 dark:from-brand-900/50 dark:to-brand-800/30 flex items-center justify-center text-brand-700 dark:text-brand-300 text-xs font-bold shadow-sm ring-2 ring-brand-300/50 dark:ring-brand-700/50">
-                        {userInitials}
-                      </div>
+                      <UserAvatar
+                        avatar={user.avatar}
+                        firstname={user.firstname}
+                        lastname={user.lastname}
+                        alt={`${user.firstname} ${user.lastname}`.trim()}
+                        fallback={userInitials}
+                        className="w-9 h-9 rounded-xl bg-gradient-to-br from-brand-100 to-brand-50 dark:from-brand-900/50 dark:to-brand-800/30 text-brand-700 dark:text-brand-300 text-xs font-bold shadow-sm ring-2 ring-brand-300/50 dark:ring-brand-700/50"
+                      />
                       {/* Online status dot */}
                       <div className="absolute -bottom-0.5 -right-0.5 w-3 h-3 bg-emerald-400 rounded-full border-2 border-white dark:border-slate-900 shadow-sm" />
                     </div>

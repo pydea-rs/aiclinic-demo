@@ -17,11 +17,12 @@ class MatchingSocketService {
   private status: MatchSocketStatus = { connected: false, reconnecting: false };
 
   connect(): Socket {
-    if (this.socket?.connected) {
+    if (this.socket && (this.socket.connected || this.socket.active)) {
       return this.socket;
     }
 
     if (this.socket) {
+      this.socket.io?.removeAllListeners();
       this.socket.removeAllListeners();
       this.socket.disconnect();
     }
@@ -45,15 +46,15 @@ class MatchingSocketService {
       this.updateStatus({ connected: false, reconnecting: false });
     });
 
-    this.socket.on('reconnect_attempt', () => {
+    this.socket.io?.on('reconnect_attempt', () => {
       this.updateStatus({ connected: false, reconnecting: true });
     });
 
-    this.socket.on('reconnect', () => {
+    this.socket.io?.on('reconnect', () => {
       this.updateStatus({ connected: true, reconnecting: false });
     });
 
-    this.socket.on('reconnect_failed', () => {
+    this.socket.io?.on('reconnect_failed', () => {
       this.updateStatus({ connected: false, reconnecting: false });
     });
 
@@ -68,6 +69,7 @@ class MatchingSocketService {
 
   disconnect(): void {
     if (this.socket) {
+      this.socket.io?.removeAllListeners();
       this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
@@ -146,6 +148,10 @@ class MatchingSocketService {
         socket.off(confirmation, onConfirmed);
         socket.off('match:error', onError);
         socket.off('exception', onError);
+        socket.off('match:offer_expired', onWithdrawn);
+        socket.off('match:cancelled', onWithdrawn);
+        socket.off('match:timeout', onWithdrawn);
+        socket.off('disconnect', onDisconnect);
         outcome();
       };
       const onConfirmed = (data: Record<string, unknown>) => {
@@ -153,6 +159,13 @@ class MatchingSocketService {
       };
       const onError = (data: Record<string, unknown>) =>
         settle(() => reject(new Error(typeof data?.message === 'string' ? data.message : 'The server refused the request.')));
+      const onWithdrawn = (data: Record<string, unknown>) => {
+        if (data?.matchRequestId === matchRequestId) {
+          settle(() => reject(new Error('Match request is no longer available.')));
+        }
+      };
+      const onDisconnect = () =>
+        settle(() => reject(new Error('Disconnected from the matching service. Try again in a moment.')));
       const timer = setTimeout(
         () => settle(() => reject(new Error('The server did not answer. Try again.'))),
         timeoutMs,
@@ -160,6 +173,10 @@ class MatchingSocketService {
       socket.on(confirmation, onConfirmed);
       socket.on('match:error', onError);
       socket.on('exception', onError);
+      socket.on('match:offer_expired', onWithdrawn);
+      socket.on('match:cancelled', onWithdrawn);
+      socket.on('match:timeout', onWithdrawn);
+      socket.on('disconnect', onDisconnect);
       socket.emit(event, { matchRequestId });
     });
   }

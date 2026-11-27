@@ -4,7 +4,12 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotificationService } from '../notification/notification.service';
 import { NurseService } from '../nurse/nurse.service';
 import { NotFoundException, ForbiddenException } from '@nestjs/common';
-import { NursePermissionEnum, UserRolesEnum } from '@prisma/client';
+import {
+  DoctorSpecialtiesEnum,
+  NursePermissionEnum,
+  TriageLevelEnum,
+  UserRolesEnum,
+} from '@prisma/client';
 import { randomInt } from 'crypto';
 import { randomUuid } from '../../test/helpers/test-data.factory';
 
@@ -645,5 +650,260 @@ Follow up in 2 weeks`;
         expect(prisma.consultation.findFirst).not.toHaveBeenCalled();
       });
     });
+  });
+
+  // ─── Persian & Letter-Prefixed SOAP Detection / Parsing ───
+
+  describe('letter-prefixed and Persian SOAP detection', () => {
+    const persianSoapSample = `SOAP Note
+
+S - Subjective
+
+بیمار ۳۰ ساله
+شکایت اصلی: تب و سردرد
+شروع علائم: ۲ تا ۳ روز
+تب: تا ۳۹°C
+لرز: ندارد
+شدت سردرد: ۹ از ۱۰
+علائم همراه: بدندرد
+علائم منفی: عدم وجود سرفه، گلودرد، آبریزش بینی، تهوع، استفراغ، حساسیت به نور، سفتی گردن، گیجی
+بیماری زمینهای مهم: گزارش نشده / خیر
+O - Objective
+
+اطلاعات معاینه فیزیکی، فشار خون، نبض، اشباع اکسیژن و تستهای آزمایشگاهی در دسترس نیست
+تب گزارششده توسط بیمار: ۳۹°C
+A - Assessment
+
+تب همراه با بدندرد میتواند با عفونت ویروسی سازگار باشد
+با این حال، سردرد بسیار شدید (۹/۱۰) همراه تب یک علامت مهم است و نیاز به بررسی حضوری پزشکی دارد
+تشخیص قطعی از راه دور ممکن نیست و ممکن است نیاز به معاینه و در صورت صلاحدید پزشک، آزمایش یا تستهای تکمیلی باشد
+P - Plan
+
+مراجعه حضوری به پزشک در اسرع وقت، ترجیحاً امروز
+استراحت و مصرف مایعات
+در صورت نداشتن منع پزشکی، برای کنترل تب و درد از داروهای رایج تببر/مسکن طبق بروشور یا دستور پزشک/داروساز استفاده شود
+پایش علائم هشدار: گیجی، سفتی گردن، حساسیت به نور، ضعف اندام، تشنج، تنگی نفس، بدتر شدن سردرد
+در صورت بروز علائم هشدار: مراجعه فوری به اورژانس`;
+
+    it('should detect, extract, parse, and upsert the Persian S - Subjective SOAP format', async () => {
+      expect(service.containsSoapTag(persianSoapSample)).toBe(true);
+
+      const extracted = service.extractSoapContent(persianSoapSample);
+      expect(extracted).not.toBeNull();
+      expect(extracted?.startsWith('S - Subjective')).toBe(true);
+
+      const parsed = service.parseSoapSections(extracted!);
+      expect(parsed.subjective).toContain('بیمار ۳۰ ساله');
+      expect(parsed.subjective).toContain('شکایت اصلی: تب و سردرد');
+      expect(parsed.objective).toContain('تستهای آزمایشگاهی در دسترس نیست');
+      expect(parsed.assessment).toContain('عفونت ویروسی سازگار باشد');
+      expect(parsed.plan).toContain('مراجعه فوری به اورژانس');
+
+      prisma.patientSOAP.upsert.mockResolvedValue({ ...mockSoap, ...parsed });
+      prisma.aiConversation.findUnique.mockResolvedValue({ topic: null });
+      prisma.aiConversation.update.mockResolvedValue({});
+
+      const result = await service.detectAndUpsert(
+        mockUserId,
+        mockConversationId,
+        persianSoapSample,
+      );
+
+      expect(result).not.toBeNull();
+      expect(prisma.patientSOAP.upsert).toHaveBeenCalledWith({
+        where: { conversationId: mockConversationId },
+        create: expect.objectContaining({
+          subjective: expect.stringContaining('بیمار ۳۰ ساله'),
+          objective: expect.stringContaining('۳۹°C'),
+          assessment: expect.stringContaining('عفونت ویروسی'),
+          plan: expect.stringContaining('مراجعه فوری به اورژانس'),
+        }),
+        update: expect.any(Object),
+      });
+      expect(prisma.aiConversation.update).toHaveBeenCalledWith({
+        where: { id: mockConversationId },
+        data: { topic: expect.stringContaining('عفونت ویروسی') },
+      });
+    });
+
+    it.each([
+      [
+        'markdown heading & dash prefix',
+        '## S - Subjective\nheadache\n## O - Objective\n38C\n## A - Assessment\nviral\n## P - Plan\nrest',
+      ],
+      [
+        'bold letter prefix with colons',
+        '**S - Subjective:** headache\n**O - Objective:** 38C\n**A - Assessment:** viral\n**P - Plan:** rest',
+      ],
+      [
+        'en-dash separator',
+        'S – Subjective\nheadache\nO – Objective\n38C\nA – Assessment\nviral\nP – Plan\nrest',
+      ],
+      [
+        'trailing letter in parens',
+        'Subjective (S):\nheadache\nObjective (O):\n38C\nAssessment (A):\nviral\nPlan (P):\nrest',
+      ],
+      [
+        'localized parenthetical with bidi mark',
+        '\u200FS - Subjective (شرح حال)\nheadache\n\u200FO - Objective (معاینه)\n38C\n\u200FA - Assessment (ارزیابی)\nviral\n\u200FP - Plan (برنامه)\nrest',
+      ],
+    ])('should detect and parse SOAP headings with %s', (_label, raw) => {
+      expect(service.containsSoapTag(raw)).toBe(true);
+      const parsed = service.parseSoapSections(
+        service.extractSoapContent(raw)!,
+      );
+      expect(parsed.subjective).toBe('headache');
+      expect(parsed.objective).toBe('38C');
+      expect(parsed.assessment).toBe('viral');
+      expect(parsed.plan).toBe('rest');
+    });
+
+    it('should not split on prose lines starting with a section word inside a section', () => {
+      const raw =
+        'Subjective: headache\nObjective: BP normal\nAssessment: tension headache\nPlan: Start sumatriptan\nPlan to follow up in 2 weeks';
+      const parsed = service.parseSoapSections(raw);
+      expect(parsed.plan).toContain('Start sumatriptan');
+      expect(parsed.plan).toContain('Plan to follow up in 2 weeks');
+    });
+  });
+
+  // ─── getForConversation ───
+
+  describe('getForConversation', () => {
+    it('should return SOAP when the owner requests it', async () => {
+      prisma.patientSOAP.findUnique.mockResolvedValue(mockSoap);
+
+      const result = await service.getForConversation(
+        mockConversationId,
+        mockUserId,
+        false,
+        UserRolesEnum.PATIENT,
+      );
+
+      expect(result).toEqual(mockSoap);
+    });
+
+    it('should return null when no SOAP exists for the conversation', async () => {
+      prisma.patientSOAP.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.getForConversation(
+          mockConversationId,
+          mockUserId,
+          false,
+          UserRolesEnum.PATIENT,
+        ),
+      ).resolves.toBeNull();
+    });
+
+    it('should forbid an unrelated user from reading another user conversation SOAP', async () => {
+      prisma.patientSOAP.findUnique.mockResolvedValue(mockSoap);
+
+      await expect(
+        service.getForConversation(
+          mockConversationId,
+          randomUuid(),
+          false,
+          UserRolesEnum.PATIENT,
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  // ─── EN & FA suggestedSpecialty / triageLevel Extraction ───
+
+  describe('specialty and triage extraction in detectAndUpsert', () => {
+    it.each([
+      {
+        label: 'English explicit Cardiology + Emergency chest pain',
+        text: '***SOAP***\nSubjective: Severe chest pain radiating to left arm and shortness of breath\nObjective: BP 150/95\nAssessment: Acute coronary syndrome\nPlan: Call 911 immediately\nSuggested Specialty: Cardiology\nTriage Level: EMERGENCY\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.CARDIOLOGY,
+        expectedTriage: TriageLevelEnum.EMERGENCY,
+      },
+      {
+        label: 'English Neurology migraine keyword inference + Urgent',
+        text: '***SOAP***\nSubjective: Severe headache with aura and numbness\nObjective: Alert and oriented\nAssessment: Suspected acute migraine attack\nPlan: Urgent care evaluation within 24 hours\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.NEUROLOGY,
+        expectedTriage: TriageLevelEnum.URGENT,
+      },
+      {
+        label: 'English Dermatology self-care',
+        text: '***SOAP***\nSubjective: Mild itchy skin rash on forearm\nObjective: Localized mild dermatitis\nAssessment: Mild contact dermatitis, self-limiting\nPlan: Rest and monitor at home with over-the-counter moisturizer\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.DERMATOLOGY,
+        expectedTriage: TriageLevelEnum.SELF_CARE,
+      },
+      {
+        label: 'Persian SOAP Gastroenterology + Urgent high fever',
+        text: '***SOAP***\nS - Subjective\nبیمار با شکم‌درد و استفراغ مداوم و تب بالا (۳۹ درجه) مراجعه کرده است.\nO - Objective\nتب ۳۹°C\nA - Assessment\nاحتمال التهاب حاد معده و گوارش\nP - Plan\nمراجعه فوری به پزشک گوارش\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.GASTROENTEROLOGY,
+        expectedTriage: TriageLevelEnum.URGENT,
+      },
+      {
+        label: 'Persian explicit Orthopedics + SEE_DOCTOR default',
+        text: '***SOAP***\nSubjective: کمردرد مزمن هنگام راه رفتن\nObjective: محدودیت حرکتی خفیف\nAssessment: درد عضلانی اسکلتی کمر\nPlan: ویزیت سرپایی و فیزیوتراپی\nتخصص پیشنهادی: ارتوپدی\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.ORTHOPEDICS,
+        expectedTriage: TriageLevelEnum.SEE_DOCTOR,
+      },
+      {
+        label: 'Unmatched general symptoms fallback to GENERAL + SEE_DOCTOR',
+        text: '***SOAP***\nSubjective: Fatigue for 2 days\nObjective: Vitals stable\nAssessment: Nonspecific malaise\nPlan: Follow up at clinic\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.GENERAL,
+        expectedTriage: TriageLevelEnum.SEE_DOCTOR,
+      },
+      {
+        label:
+          'Explicit Gastroenterology does not falsely collide with ENT substring',
+        text: '***SOAP***\nSubjective: Bloating\nObjective: Mild epigastric tenderness\nAssessment: Dyspepsia\nPlan: Outpatient review\nSuggested Specialty: Gastroenterology\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.GASTROENTEROLOGY,
+        expectedTriage: TriageLevelEnum.SEE_DOCTOR,
+      },
+      {
+        label:
+          'Heartburn with negated chest pain and negated SOB routes to GASTROENTEROLOGY + SEE_DOCTOR (not CARDIOLOGY / EMERGENCY)',
+        text: '***SOAP***\nSubjective: Patient reports burning heartburn after meals. Denies chest pain, no shortness of breath.\nObjective: Stable vitals\nAssessment: Gastroesophageal reflux\nPlan: Dietary changes and routine follow-up\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.GASTROENTEROLOGY,
+        expectedTriage: TriageLevelEnum.SEE_DOCTOR,
+      },
+      {
+        label:
+          'Persian negative symptom list (علائم منفی) does not trigger ENT/GASTRO or EMERGENCY',
+        text: '***SOAP***\nS - Subjective\nشکایت اصلی: تب و سردرد\nتب: تا ۳۹°C\nتنگی نفس: ندارد\nعلائم منفی: عدم وجود سرفه، گلودرد، آبریزش بینی، تهوع، استفراغ\nO - Objective\nهوشیار\nA - Assessment\nسندرم تب‌دار ویروسی\nP - Plan\nمراجعه فوری جهت معاینه\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.GENERAL,
+        expectedTriage: TriageLevelEnum.URGENT,
+      },
+      {
+        label:
+          'Mild acute viral cold does not falsely trigger URGENT from standalone word acute',
+        text: '***SOAP***\nSubjective: Runny nose for 1 day\nObjective: Afebrile\nAssessment: Mild acute viral upper respiratory cold, self-limiting\nPlan: Rest and hydration at home\n***SOAP***',
+        expectedSpecialty: DoctorSpecialtiesEnum.GENERAL,
+        expectedTriage: TriageLevelEnum.SELF_CARE,
+      },
+    ])(
+      'extracts specialty and triage for $label',
+      async ({ text, expectedSpecialty, expectedTriage }) => {
+        prisma.patientSOAP.upsert.mockResolvedValue({
+          ...mockSoap,
+          suggestedSpecialty: expectedSpecialty,
+          triageLevel: expectedTriage,
+        });
+        prisma.aiConversation.findUnique.mockResolvedValue({
+          topic: 'existing',
+        });
+
+        const result = await service.detectAndUpsert(
+          mockUserId,
+          mockConversationId,
+          text,
+        );
+
+        expect(result?.suggestedSpecialty).toBe(expectedSpecialty);
+        expect(result?.triageLevel).toBe(expectedTriage);
+        const call = prisma.patientSOAP.upsert.mock.calls[0][0];
+        expect(call.create.suggestedSpecialty).toBe(expectedSpecialty);
+        expect(call.create.triageLevel).toBe(expectedTriage);
+        expect(call.update.suggestedSpecialty).toBe(expectedSpecialty);
+        expect(call.update.triageLevel).toBe(expectedTriage);
+      },
+    );
   });
 });

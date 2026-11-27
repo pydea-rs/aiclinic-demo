@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { adminApi } from '../../api';
 import toast from 'react-hot-toast';
-import { User } from '../../lib/types/api';
-import { Users, Ban, ShieldOff } from 'lucide-react';
+import { User, UserRole } from '../../lib/types/api';
+import { useAuthStore } from '../../lib/stores/auth.store';
+import { getErrorMessage } from '../../lib/api/error.utils';
+import { UserAvatar } from '../../components/UserAvatar';
+import { Users, Ban } from 'lucide-react';
 
 type UserUpdatePayload = {
   firstname?: string;
@@ -13,6 +16,7 @@ type UserUpdatePayload = {
 };
 
 export const AdminUserManagementPage: React.FC = () => {
+  const { user: currentUser } = useAuthStore();
   const [users, setUsers] = useState<User[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -37,6 +41,7 @@ export const AdminUserManagementPage: React.FC = () => {
   }, [searchTerm]);
 
   useEffect(() => {
+    let cancelled = false;
     const loadUsers = async () => {
       setLoading(true);
       try {
@@ -48,15 +53,21 @@ export const AdminUserManagementPage: React.FC = () => {
           search: debouncedSearch || undefined,
           isBanned: bannedFilter ? bannedFilter === 'true' : undefined,
         });
+        if (cancelled) return;
         setUsers(data.data || []);
         setTotal(data.total || 0);
-      } catch {
-        toast.error('Failed to load users');
+      } catch (error: unknown) {
+        if (!cancelled) {
+          toast.error(getErrorMessage(error, 'Failed to load users'));
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) {
+          setLoading(false);
+        }
       }
     };
-    loadUsers();
+    void loadUsers();
+    return () => { cancelled = true; };
   }, [page, roleFilter, debouncedSearch, bannedFilter]);
 
   const handleUpdateUser = async (id: string, payload: UserUpdatePayload) => {
@@ -65,8 +76,8 @@ export const AdminUserManagementPage: React.FC = () => {
       setUsers(users.map(u => u.id === id ? updatedUser : u));
       setEditingUser(null);
       toast.success('User updated successfully');
-    } catch {
-      toast.error('Failed to update user');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to update user'));
     }
   };
 
@@ -77,8 +88,8 @@ export const AdminUserManagementPage: React.FC = () => {
       const updatedUser = await adminApi.users.deactivate(id);
       setUsers(users.map(u => u.id === id ? updatedUser : u));
       toast.success('User deactivated successfully');
-    } catch {
-      toast.error('Failed to deactivate user');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to deactivate user'));
     }
   };
 
@@ -94,8 +105,8 @@ export const AdminUserManagementPage: React.FC = () => {
           ? 'User fired successfully'
           : 'User banned successfully'
       );
-    } catch {
-      toast.error('Failed to ban user');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to ban user'));
     }
   };
 
@@ -105,8 +116,8 @@ export const AdminUserManagementPage: React.FC = () => {
       const updatedUser = await adminApi.users.unban(id);
       setUsers(users.map(u => u.id === id ? updatedUser : u));
       toast.success('User unbanned successfully');
-    } catch {
-      toast.error('Failed to unban user');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to unban user'));
     }
   };
 
@@ -125,8 +136,8 @@ export const AdminUserManagementPage: React.FC = () => {
       const updatedUser = await adminApi.adminActions.promote(id);
       setUsers(users.map(u => u.id === id ? updatedUser : u));
       toast.success('User promoted successfully');
-    } catch {
-      toast.error('Failed to promote user');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to promote user'));
     }
   };
 
@@ -137,43 +148,12 @@ export const AdminUserManagementPage: React.FC = () => {
       const updatedUser = await adminApi.adminActions.demote(id);
       setUsers(users.map(u => u.id === id ? updatedUser : u));
       toast.success('User demoted successfully');
-    } catch {
-      toast.error('Failed to demote user');
+    } catch (error: unknown) {
+      toast.error(getErrorMessage(error, 'Failed to demote user'));
     }
   };
 
   const totalPages = Math.ceil(total / limit);
-
-  if (loading) {
-    return (
-      <div className="p-6 max-w-7xl mx-auto animate-fade-in">
-        <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 shimmer rounded-xl" />
-          <div className="space-y-2">
-            <div className="w-44 h-6 shimmer" />
-            <div className="w-56 h-4 shimmer" />
-          </div>
-        </div>
-        <div className="flex gap-4 mb-6">
-          <div className="flex-1 h-10 shimmer rounded-xl" />
-          <div className="w-40 h-10 shimmer rounded-xl" />
-        </div>
-        <div className="card overflow-hidden">
-          <div className="p-4 space-y-4">
-            {[...Array(8)].map((_, i) => (
-              <div key={i} className="flex items-center gap-4">
-                <div className="w-32 h-4 shimmer" />
-                <div className="w-48 h-4 shimmer" />
-                <div className="w-20 h-5 shimmer rounded-full" />
-                <div className="w-16 h-5 shimmer rounded-full" />
-                <div className="w-24 h-4 shimmer" />
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="p-6 max-w-7xl mx-auto animate-fade-in">
@@ -220,6 +200,19 @@ export const AdminUserManagementPage: React.FC = () => {
 
       {/* Users Table */}
       <div className="card overflow-hidden animate-slide-in-up">
+        {loading ? (
+          <div className="p-4 space-y-4">
+            {[...Array(6)].map((_, i) => (
+              <div key={i} className="flex items-center gap-4">
+                <div className="w-32 h-4 shimmer" />
+                <div className="w-48 h-4 shimmer" />
+                <div className="w-20 h-5 shimmer rounded-full" />
+                <div className="w-16 h-5 shimmer rounded-full" />
+                <div className="w-24 h-4 shimmer" />
+              </div>
+            ))}
+          </div>
+        ) : (
         <table className="w-full">
           <thead className="bg-gray-50/80">
             <tr>
@@ -231,10 +224,23 @@ export const AdminUserManagementPage: React.FC = () => {
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-200">
-            {users.map((user) => (
+            {users.map((user) => {
+              const isSelf = currentUser?.id === user.id;
+              const isTargetProtectedAdmin = (user.isAdmin || user.isSuperAdmin) && !currentUser?.isSuperAdmin;
+              const canManageDestructive = !isSelf && !user.isSuperAdmin && !isTargetProtectedAdmin;
+              return (
               <tr key={user.id} className="table-row-hover">
                 <td className="px-4 py-3 text-sm font-medium">
-                  {user.firstname} {user.lastname}
+                  <div className="flex items-center gap-3">
+                    <UserAvatar
+                      avatar={user.avatar}
+                      firstname={user.firstname}
+                      lastname={user.lastname}
+                      alt={`${user.firstname} ${user.lastname}`}
+                      className="w-8 h-8 rounded-full bg-gray-100 text-xs font-semibold text-gray-600 flex-shrink-0"
+                    />
+                    <span>{user.firstname} {user.lastname}</span>
+                  </div>
                 </td>
                 <td className="px-4 py-3 text-sm text-gray-500">{user.email}</td>
                 <td className="px-4 py-3 text-sm">
@@ -266,13 +272,15 @@ export const AdminUserManagementPage: React.FC = () => {
                   )}
                 </td>
                 <td className="px-4 py-3 text-sm">
-                  <button
-                    onClick={() => setEditingUser(user)}
-                    className="text-brand-600 hover:text-brand-700 mr-3 font-medium"
-                  >
-                    Edit
-                  </button>
-                  {user.isAdmin && !user.isSuperAdmin && (
+                  {!isTargetProtectedAdmin && (
+                    <button
+                      onClick={() => setEditingUser(user)}
+                      className="text-brand-600 hover:text-brand-700 mr-3 font-medium"
+                    >
+                      Edit
+                    </button>
+                  )}
+                  {currentUser?.isSuperAdmin && user.isAdmin && !user.isSuperAdmin && !isSelf && (
                     <button
                       onClick={() => handleDemote(user.id)}
                       className="text-purple-600 hover:text-purple-800 mr-3 font-medium"
@@ -280,7 +288,7 @@ export const AdminUserManagementPage: React.FC = () => {
                       Demote
                     </button>
                   )}
-                  {!user.isAdmin && (
+                  {currentUser?.isSuperAdmin && !user.isAdmin && !user.isSuperAdmin && (
                     <button
                       onClick={() => handlePromote(user.id)}
                       className="text-purple-600 hover:text-purple-800 mr-3 font-medium"
@@ -288,7 +296,7 @@ export const AdminUserManagementPage: React.FC = () => {
                       Promote
                     </button>
                   )}
-                  {user.isBanned ? (
+                  {canManageDestructive && (user.isBanned ? (
                     <button
                       onClick={() => handleUnbanUser(user.id)}
                       className="text-green-600 hover:text-green-800 mr-3 font-medium"
@@ -302,21 +310,25 @@ export const AdminUserManagementPage: React.FC = () => {
                     >
                       {getBanLabel(user)}
                     </button>
+                  ))}
+                  {canManageDestructive && (
+                    <button
+                      onClick={() => handleDeactivateUser(user.id)}
+                      className={`font-medium ${user.isActive ? 'text-red-600 hover:text-red-800' : 'text-gray-400'}`}
+                      disabled={!user.isActive || user.isBanned}
+                    >
+                      {user.isActive ? 'Deactivate' : 'Inactive'}
+                    </button>
                   )}
-                  <button
-                    onClick={() => handleDeactivateUser(user.id)}
-                    className={`font-medium ${user.isActive ? 'text-red-600 hover:text-red-800' : 'text-gray-400'}`}
-                    disabled={!user.isActive || user.isBanned}
-                  >
-                    {user.isActive ? 'Deactivate' : 'Inactive'}
-                  </button>
                 </td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
+        )}
 
-        {users.length === 0 && (
+        {!loading && users.length === 0 && (
           <div className="p-8 text-center text-gray-500">
             No users found matching your criteria
           </div>
@@ -473,7 +485,7 @@ const EditUserModal: React.FC<EditUserModalProps> = ({ user, onClose, onSave }) 
             <label className="block text-sm font-medium mb-1">Role</label>
             <select
               value={formData.role}
-              onChange={e => setFormData({ ...formData, role: e.target.value })}
+              onChange={e => setFormData({ ...formData, role: e.target.value as UserRole })}
               className="w-full px-3 py-2 input-focus"
             >
               <option value="NONE">Guest</option>

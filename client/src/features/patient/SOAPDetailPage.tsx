@@ -1,23 +1,26 @@
 import React from 'react';
-import { useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import ReactMarkdown, { type Components } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { patientApi } from '../../api';
-import { Loader2, FileText, Calendar, Tag, AlertTriangle } from 'lucide-react';
+import { Loader2, FileText, Calendar, Tag, AlertTriangle, Zap } from 'lucide-react';
 import { formatSpecialty, formatTriageLevel } from '../../lib/format';
+import { getMessageDirection } from '../../lib/text-direction';
+import { useAuthStore } from '../../lib/stores/auth.store';
 
 const mdComponents: Components = {
   p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
   strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
   em: ({ children }) => <em className="italic">{children}</em>,
-  ul: ({ children }) => <ul className="mb-2 last:mb-0 ml-4 space-y-0.5 list-disc">{children}</ul>,
-  ol: ({ children }) => <ol className="mb-2 last:mb-0 ml-4 space-y-0.5 list-decimal">{children}</ol>,
+  ul: ({ children }) => <ul className="mb-2 last:mb-0 ms-4 space-y-0.5 list-disc">{children}</ul>,
+  ol: ({ children }) => <ol className="mb-2 last:mb-0 ms-4 space-y-0.5 list-decimal">{children}</ol>,
   li: ({ children }) => <li className="leading-relaxed">{children}</li>,
 };
 
 export const SOAPDetailPage: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const user = useAuthStore((s) => s.user);
 
   const { data: soap, isLoading, error } = useQuery({
     queryKey: ['soap', id],
@@ -74,12 +77,23 @@ export const SOAPDetailPage: React.FC = () => {
               {formatDate(soap.createdAt)}
             </p>
           </div>
-          {soap.suggestedSpecialty && (
-            <div className="text-right">
-              <p className="text-white/70 text-sm mb-2">Specialty</p>
-              <p className="text-xl font-semibold">{formatSpecialty(soap.suggestedSpecialty)}</p>
-            </div>
-          )}
+          <div className="flex flex-col items-end gap-3">
+            {soap.suggestedSpecialty && (
+              <div className="text-right">
+                <p className="text-white/70 text-sm mb-1">Specialty</p>
+                <p className="text-xl font-semibold">{formatSpecialty(soap.suggestedSpecialty)}</p>
+              </div>
+            )}
+            {user?.role === 'PATIENT' && (
+              <Link
+                to={`/matching/request?soapId=${soap.id}`}
+                className="inline-flex items-center gap-2 bg-white text-brand-700 hover:bg-brand-50 font-semibold text-sm px-4 py-2 rounded-xl shadow-sm transition-colors"
+              >
+                <Zap className="w-4 h-4" />
+                Find a Doctor
+              </Link>
+            )}
+          </div>
         </div>
       </div>
 
@@ -94,7 +108,10 @@ export const SOAPDetailPage: React.FC = () => {
                 <Tag className="w-5 h-5 text-blue-500" />
                 <h2 className="text-xl font-bold text-gray-900">Subjective</h2>
               </div>
-              <div className="text-gray-700 leading-relaxed prose prose-sm max-w-none">
+              <div
+                dir={soap.subjective ? getMessageDirection(soap.subjective) : 'ltr'}
+                className="text-gray-700 leading-relaxed prose prose-sm max-w-none text-start"
+              >
                 {soap.subjective ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{soap.subjective}</ReactMarkdown>
                 ) : (
@@ -109,7 +126,10 @@ export const SOAPDetailPage: React.FC = () => {
                 <Tag className="w-5 h-5 text-emerald-500" />
                 <h2 className="text-xl font-bold text-gray-900">Objective</h2>
               </div>
-              <div className="text-gray-700 leading-relaxed prose prose-sm max-w-none">
+              <div
+                dir={soap.objective ? getMessageDirection(soap.objective) : 'ltr'}
+                className="text-gray-700 leading-relaxed prose prose-sm max-w-none text-start"
+              >
                 {soap.objective ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{soap.objective}</ReactMarkdown>
                 ) : (
@@ -124,7 +144,10 @@ export const SOAPDetailPage: React.FC = () => {
                 <Tag className="w-5 h-5 text-amber-500" />
                 <h2 className="text-xl font-bold text-gray-900">Assessment</h2>
               </div>
-              <div className="text-gray-700 leading-relaxed prose prose-sm max-w-none">
+              <div
+                dir={soap.assessment ? getMessageDirection(soap.assessment) : 'ltr'}
+                className="text-gray-700 leading-relaxed prose prose-sm max-w-none text-start"
+              >
                 {soap.assessment ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{soap.assessment}</ReactMarkdown>
                 ) : (
@@ -139,7 +162,10 @@ export const SOAPDetailPage: React.FC = () => {
                 <Tag className="w-5 h-5 text-purple-500" />
                 <h2 className="text-xl font-bold text-gray-900">Plan</h2>
               </div>
-              <div className="text-gray-700 leading-relaxed prose prose-sm max-w-none">
+              <div
+                dir={soap.plan ? getMessageDirection(soap.plan) : 'ltr'}
+                className="text-gray-700 leading-relaxed prose prose-sm max-w-none text-start"
+              >
                 {soap.plan ? (
                   <ReactMarkdown remarkPlugins={[remarkGfm]} components={mdComponents}>{soap.plan}</ReactMarkdown>
                 ) : (
@@ -163,7 +189,10 @@ export const SOAPDetailPage: React.FC = () => {
             {soap.rawNote && (
               <div className="card bg-gray-50 p-6 border-l-4 border-gray-400 animate-slide-in-up" style={{ animationDelay: '480ms' }}>
                 <h2 className="text-xl font-bold text-gray-900 mb-4">Raw Note</h2>
-                <pre className="text-sm text-gray-700 overflow-x-auto bg-white p-4 rounded border">
+                <pre
+                  dir={getMessageDirection(soap.rawNote)}
+                  className="text-sm text-gray-700 overflow-x-auto bg-white p-4 rounded border whitespace-pre-wrap text-start"
+                >
                   {soap.rawNote}
                 </pre>
               </div>

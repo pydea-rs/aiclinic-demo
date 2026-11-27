@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import toast from "react-hot-toast";
 import { AiChatMessage, MessageChoice, ChatState, ConnectionStatus } from "../../../lib/types/chat";
 import { aiChatService, AiAgentMessage } from "../../../lib/ai/ai-chat.service";
+import { createGreetingStripper, GreetingStripper } from "../../../lib/ai/greeting-stripper";
 
 const TYPEWRITER_SPEED_MS = 14;
 const POLLING_TRIGGER_DELAY_MS = 8000;
@@ -48,7 +49,24 @@ export const useChat = (options?: UseChatOptions) => {
   const forcePollModeRef = useRef(deliveryMode === 'poll');
 
   const typewriterIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const activeTypewriterIdRef = useRef<string | null>(null);
+  const activeTypewriterFullTextRef = useRef<string | null>(null);
   const seenBotMessageIds = useRef<Set<string>>(new Set());
+  const notifiedSoapIdsRef = useRef<Set<string>>(new Set());
+  const greetingStripperRef = useRef<GreetingStripper | null>(null);
+
+  const getGreetingStripper = useCallback(() => {
+    if (!greetingStripperRef.current) {
+      greetingStripperRef.current = createGreetingStripper();
+    }
+    return greetingStripperRef.current;
+  }, []);
+
+  const notifySoapReady = useCallback((soapId: string, conversationId: string) => {
+    if (notifiedSoapIdsRef.current.has(soapId)) return;
+    notifiedSoapIdsRef.current.add(soapId);
+    soapReadyCallbackRef.current?.({ soapId, conversationId });
+  }, []);
 
   const stopPolling = useCallback(() => {
     isWaitingForBotRef.current = false;
@@ -68,6 +86,8 @@ export const useChat = (options?: UseChatOptions) => {
       clearInterval(typewriterIntervalRef.current);
       typewriterIntervalRef.current = null;
     }
+    activeTypewriterIdRef.current = null;
+    activeTypewriterFullTextRef.current = null;
   }, []);
 
   const updateConnectionStatus = useCallback(
@@ -92,6 +112,9 @@ export const useChat = (options?: UseChatOptions) => {
 
   const startTypewriter = useCallback(
     (id: string, fullText: string, timestamp: Date, choices?: MessageChoice[]) => {
+      // flush any in-progress typewriter message to its full text instead of dropping it
+      const prevId = activeTypewriterIdRef.current;
+      const prevFullText = activeTypewriterFullTextRef.current;
       stopTypewriter();
 
       if (typingTimeoutRef.current) {
@@ -103,12 +126,22 @@ export const useChat = (options?: UseChatOptions) => {
         ...prev,
         isTyping: false,
         messages: [
-          ...prev.messages.filter((m) => !(m.isStreaming && !m.isUser)),
+          ...prev.messages.map((m) =>
+            m.isStreaming && !m.isUser
+              ? {
+                  ...m,
+                  text: m.id === prevId && prevFullText !== null ? prevFullText : m.text,
+                  isStreaming: false,
+                }
+              : m
+          ),
           { id, text: "", isUser: false, timestamp, isStreaming: true, choices },
         ],
       }));
 
       let charIndex = 0;
+      activeTypewriterIdRef.current = id;
+      activeTypewriterFullTextRef.current = fullText;
 
       typewriterIntervalRef.current = setInterval(() => {
         charIndex++;
@@ -226,15 +259,58 @@ export const useChat = (options?: UseChatOptions) => {
             pollSinceRef.current ?? undefined
           );
           if (messages.length > 0) {
-            const first = messages[0];
-            const text = extractBotMessageText(first);
-            if (text) {
+            const ordered = [...messages].sort(
+              (a, b) =>
+                (a.createdAt ? new Date(a.createdAt).getTime() : 0) -
+                (b.createdAt ? new Date(b.createdAt).getTime() : 0),
+            );
+
+            for (const msg of ordered) {
+              if (msg.soapId) {
+                notifySoapReady(msg.soapId, conversationId);
+              }
+            }
+
+            let hadNonEmptyPollPayload = false;
+            const unseen: Array<{ msg: AiAgentMessage; text: string }> = [];
+            for (const msg of ordered) {
+              const rawText = extractBotMessageText(msg);
+              if (!rawText) continue;
+              if (msg.id && seenBotMessageIds.current.has(msg.id)) continue;
+
+              const cleaned = getGreetingStripper().processBotMessage(rawText, msg.id);
+              if (!cleaned.trim()) {
+                if (msg.id) seenBotMessageIds.current.add(msg.id);
+                hadNonEmptyPollPayload = true;
+                continue;
+              }
+              unseen.push({ msg, text: cleaned });
+            }
+
+            if (unseen.length > 0) {
+              for (const item of unseen.slice(0, -1)) {
+                if (item.msg.id) seenBotMessageIds.current.add(item.msg.id);
+                addMessage({
+                  id: item.msg.id,
+                  text: item.text,
+                  isUser: false,
+                  timestamp: item.msg.createdAt ? new Date(item.msg.createdAt) : new Date(),
+                  choices: extractBotMessageChoices(item.msg),
+                });
+              }
+              const last = unseen[unseen.length - 1];
               addBotMessage({
-                id: first.id,
-                text,
-                timestamp: first.createdAt ? new Date(first.createdAt) : new Date(),
-                choices: extractBotMessageChoices(first),
+                id: last.msg.id,
+                text: last.text,
+                timestamp: last.msg.createdAt ? new Date(last.msg.createdAt) : new Date(),
+                choices: extractBotMessageChoices(last.msg),
               });
+              return;
+            }
+
+            if (hadNonEmptyPollPayload) {
+              stopPolling();
+              setChatState((prev) => ({ ...prev, isTyping: false }));
               return;
             }
           }
@@ -254,35 +330,47 @@ export const useChat = (options?: UseChatOptions) => {
         void poll();
       }, POLLING_INTERVAL_MS);
     },
-    [addBotMessage, extractBotMessageText, extractBotMessageChoices, stopPolling]
+    [addBotMessage, addMessage, extractBotMessageText, extractBotMessageChoices, getGreetingStripper, notifySoapReady, stopPolling]
   );
 
   const startConversation = useCallback(async () => {
     try {
       seenBotMessageIds.current.clear();
+      notifiedSoapIdsRef.current.clear();
+      getGreetingStripper().reset();
 
       let conversationId: string;
 
-      if (options?.conversationId) {
+      if (options?.conversationId && !options?.forceNew) {
         conversationId = await aiChatService.resumeConversation(options.conversationId);
       } else {
         conversationId = await aiChatService.startNewConversation();
       }
 
       if (!conversationId) throw new Error("No conversationId returned by server");
+      if (!mountedRef.current) return;
 
-      if (options?.conversationId) {
-        let loadedMessages: AiChatMessage[] = [];
+      if (options?.conversationId && !options?.forceNew) {
+        const loadedMessages: AiChatMessage[] = [];
         try {
           const history = await aiChatService.getConversationHistory(conversationId);
           if (history.length > 0) {
-            loadedMessages = history.map((msg) => ({
-              id: msg.id,
-              text: msg.text,
-              isUser: msg.role === 'user',
-              timestamp: new Date(msg.createdAt),
-              choices: msg.choices?.map((c) => ({ label: c.label, value: c.value })),
-            }));
+            for (const msg of history) {
+              const isUser = msg.role === 'user';
+              let text = msg.text;
+              if (!isUser) {
+                seenBotMessageIds.current.add(msg.id);
+                text = getGreetingStripper().processBotMessage(msg.text, msg.id);
+                if (!text.trim()) continue;
+              }
+              loadedMessages.push({
+                id: msg.id,
+                text,
+                isUser,
+                timestamp: new Date(msg.createdAt),
+                choices: msg.choices?.map((c) => ({ label: c.label, value: c.value })),
+              });
+            }
             for (let i = 0; i < loadedMessages.length - 1; i++) {
               const botMsg = loadedMessages[i];
               const nextMsg = loadedMessages[i + 1];
@@ -294,9 +382,6 @@ export const useChat = (options?: UseChatOptions) => {
                   nextMsg.text = match.label;
                 }
               }
-            }
-            for (const msg of history) {
-              if (msg.role === 'bot') seenBotMessageIds.current.add(msg.id);
             }
           }
         } catch {
@@ -312,7 +397,7 @@ export const useChat = (options?: UseChatOptions) => {
       toast.error("Failed to start conversation. Please check your connection.");
       updateConnectionStatus({ error: "Failed to start conversation" });
     }
-  }, [updateConnectionStatus, options?.conversationId]);
+  }, [updateConnectionStatus, getGreetingStripper, options?.conversationId, options?.forceNew]);
 
   const connectSSE = useCallback(
     (conversationId: string) => {
@@ -393,9 +478,18 @@ export const useChat = (options?: UseChatOptions) => {
               now - lastUserMessageAtRef.current < 5000);
           if (isUserEcho || messageData?.isBot === false) return;
 
+          const msgId = messageData.id as string | undefined;
+          const cleanedText = getGreetingStripper().processBotMessage(text, msgId);
+          if (!cleanedText.trim()) {
+            if (msgId) seenBotMessageIds.current.add(msgId);
+            stopPolling();
+            setChatState((prev) => ({ ...prev, isTyping: false }));
+            return;
+          }
+
           addBotMessage({
-            id: messageData.id as string | undefined,
-            text,
+            id: msgId,
+            text: cleanedText,
             timestamp: messageData.createdAt
               ? new Date(messageData.createdAt as string)
               : new Date(),
@@ -410,13 +504,19 @@ export const useChat = (options?: UseChatOptions) => {
         if (!mountedRef.current) return;
         try {
           const messageData = JSON.parse(e.data as string) as Record<string, unknown>;
-          const text =
+          const msgId = messageData.id as string | undefined;
+          const rawText =
             extractMessageText(messageData?.payload as Record<string, unknown>) ??
             extractMessageText(messageData);
+          const text = rawText ? getGreetingStripper().processBotMessage(rawText, msgId) : null;
           const choices = extractChoices(messageData?.payload as Record<string, unknown> | undefined);
 
+          if (text && msgId && activeTypewriterIdRef.current === msgId) {
+            stopTypewriter();
+          }
+
           setChatState((prev) => {
-            const index = prev.messages.findIndex((m) => m.id === messageData.id);
+            const index = prev.messages.findIndex((m) => m.id === msgId);
             if (index === -1) return prev;
             const existing = prev.messages[index];
 
@@ -451,7 +551,7 @@ export const useChat = (options?: UseChatOptions) => {
       eventSource.addEventListener("soap_ready", (e: MessageEvent) => {
         try {
           const data = JSON.parse(e.data as string) as { soapId: string; conversationId: string };
-          soapReadyCallbackRef.current?.(data);
+          notifySoapReady(data.soapId, data.conversationId);
         } catch {
           // ignore
         }
@@ -498,7 +598,7 @@ export const useChat = (options?: UseChatOptions) => {
 
       eventSourceRef.current = eventSource;
     },
-    [addBotMessage, updateConnectionStatus, extractMessageText, extractChoices]
+    [addBotMessage, updateConnectionStatus, extractMessageText, extractChoices, getGreetingStripper, notifySoapReady, stopPolling, stopTypewriter]
   );
 
   // Use refs for values accessed inside sendMessage to avoid stale closures
@@ -527,6 +627,8 @@ export const useChat = (options?: UseChatOptions) => {
   const resetChat = useCallback(async () => {
     disconnect();
     seenBotMessageIds.current.clear();
+    notifiedSoapIdsRef.current.clear();
+    getGreetingStripper().reset();
     lastUserMessageRef.current = null;
     lastUserMessageAtRef.current = 0;
     isInitializingRef.current = false;
@@ -550,7 +652,7 @@ export const useChat = (options?: UseChatOptions) => {
       toast.error("Failed to start new conversation.");
       updateConnectionStatus({ error: "Failed to start conversation" });
     }
-  }, [disconnect, connectSSE, updateConnectionStatus]);
+  }, [disconnect, connectSSE, getGreetingStripper, updateConnectionStatus]);
 
   const sendMessage = useCallback(
     async (text: string, quickReply?: { value: string; label: string }) => {
@@ -629,7 +731,7 @@ export const useChat = (options?: UseChatOptions) => {
     updateConnectionStatus({ error: undefined });
     try {
       const conversationId = await startConversation();
-      if (conversationId) connectSSE(conversationId);
+      if (conversationId && mountedRef.current) connectSSE(conversationId);
     } finally {
       isInitializingRef.current = false;
     }

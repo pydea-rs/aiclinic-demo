@@ -11,11 +11,20 @@ vi.mock('react-router-dom', async () => {
 
 vi.mock('react-hot-toast', () => ({ default: { success: vi.fn(), error: vi.fn() } }));
 
-const { mockList, mockGetUnreadCount, mockMarkAsRead, mockMarkAllAsRead } = vi.hoisted(() => ({
+const {
+  mockList,
+  mockGetUnreadCount,
+  mockMarkAsRead,
+  mockMarkAllAsRead,
+  mockGetConsultationById,
+  mockOpenConsultationChat,
+} = vi.hoisted(() => ({
   mockList: vi.fn(),
   mockGetUnreadCount: vi.fn(),
   mockMarkAsRead: vi.fn(),
   mockMarkAllAsRead: vi.fn(),
+  mockGetConsultationById: vi.fn(),
+  mockOpenConsultationChat: vi.fn(),
 }));
 
 vi.mock('../../../api', () => ({
@@ -27,15 +36,21 @@ vi.mock('../../../api', () => ({
     subscribePush: vi.fn(),
     unsubscribePush: vi.fn(),
   },
+  consultationApi: {
+    getConsultationById: (...args: unknown[]) => mockGetConsultationById(...args),
+  },
+  chatApi: {
+    openConsultationChat: (...args: unknown[]) => mockOpenConsultationChat(...args),
+  },
 }));
 
 const NOW = new Date('2026-07-25T12:00:00.000Z').getTime();
 
-function makeNotification(overrides: Partial<Notification> & { type: string }): Notification {
+function makeNotification(overrides: Partial<Notification> = {}): Notification {
   return {
     id: 1,
     userId: 'user-1',
-    type: 'SYSTEM',
+    type: 'CONSULTATION_REQUEST',
     title: 'Test Notification',
     body: 'Test body',
     channel: 'EMAIL',
@@ -168,15 +183,55 @@ describe('NotificationPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/consultation/c-123');
     });
 
-    it('should navigate to /consultation/:id for DOCTOR_DECISION', async () => {
+    it('should navigate to /consultation/:id for match-accepted DOCTOR_DECISION without decision metadata', async () => {
       await renderAndClick(
         makeNotification({
           type: 'DOCTOR_DECISION',
-          title: 'Decision Made',
+          title: 'Doctor Match Accepted',
           data: { consultationId: 'c-456' },
         }),
       );
       expect(mockNavigate).toHaveBeenCalledWith('/consultation/c-456');
+    });
+
+    it('should open decision modal and launch shared chat on Open Chat for CHAT DOCTOR_DECISION', async () => {
+      mockGetConsultationById.mockResolvedValue({
+        id: 'c-chat-1',
+        patientId: 'pat-1',
+        doctorId: 10,
+        status: 'DOCTOR_DECIDED',
+        doctorDecision: 'CONSULTATION',
+        visitMethod: 'CHAT',
+        followUpNeeded: false,
+        createdAt: new Date(NOW).toISOString(),
+        updatedAt: new Date(NOW).toISOString(),
+      });
+      mockOpenConsultationChat.mockResolvedValue({ id: 'shared-chat-99' });
+
+      await renderAndClick(
+        makeNotification({
+          type: 'DOCTOR_DECISION',
+          title: 'Doctor Consultation Decision',
+          body: 'Dr. Jane Doe decided on Consultation via Chat.',
+          data: {
+            consultationId: 'c-chat-1',
+            accepted: true,
+            isConsultationDecision: true,
+            doctorName: 'Jane Doe',
+            doctorDecision: 'CONSULTATION',
+            visitMethod: 'CHAT',
+          },
+        }),
+      );
+
+      expect(mockNavigate).not.toHaveBeenCalled();
+      const openChatBtn = await screen.findByRole('button', { name: /open chat/i });
+      fireEvent.click(openChatBtn);
+
+      await waitFor(() => {
+        expect(mockOpenConsultationChat).toHaveBeenCalledWith('c-chat-1');
+        expect(mockNavigate).toHaveBeenCalledWith('/chat/shared-chat-99');
+      });
     });
 
     it('should not navigate when CONSULTATION_REQUEST has no consultationId', async () => {
@@ -254,14 +309,14 @@ describe('NotificationPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/patient/soaps');
     });
 
-    it('should navigate to /doctor/workspace for DOCTOR_VERIFIED', async () => {
+    it('should navigate to /doctor/dashboard for DOCTOR_VERIFIED', async () => {
       await renderAndClick(
         makeNotification({
           type: 'DOCTOR_VERIFIED',
           title: 'Verified',
         }),
       );
-      expect(mockNavigate).toHaveBeenCalledWith('/doctor/workspace');
+      expect(mockNavigate).toHaveBeenCalledWith('/doctor/dashboard');
     });
 
     it('should navigate to /doctor/profile for a doctor rejection', async () => {
@@ -275,7 +330,7 @@ describe('NotificationPage', () => {
       expect(mockNavigate).toHaveBeenCalledWith('/doctor/profile');
     });
 
-    it('should navigate to /doctor/workspace for DOCTOR_VERIFIED with approved true', async () => {
+    it('should navigate to /doctor/dashboard for DOCTOR_VERIFIED with approved true', async () => {
       await renderAndClick(
         makeNotification({
           type: 'DOCTOR_VERIFIED',
@@ -283,17 +338,17 @@ describe('NotificationPage', () => {
           data: { approved: true },
         }),
       );
-      expect(mockNavigate).toHaveBeenCalledWith('/doctor/workspace');
+      expect(mockNavigate).toHaveBeenCalledWith('/doctor/dashboard');
     });
 
-    it('should navigate to /doctor/workspace for NEW_REVIEW', async () => {
+    it('should navigate to /doctor/dashboard for NEW_REVIEW', async () => {
       await renderAndClick(
         makeNotification({
           type: 'NEW_REVIEW',
           title: 'New Review',
         }),
       );
-      expect(mockNavigate).toHaveBeenCalledWith('/doctor/workspace');
+      expect(mockNavigate).toHaveBeenCalledWith('/doctor/dashboard');
     });
 
     it.each([

@@ -1,10 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { reviewApi } from '../../api';
 import { useParams } from 'react-router-dom';
+import { queryClient } from '../../lib/queryClient';
 import toast from 'react-hot-toast';
 import { useAuthStore } from '../../lib/stores/auth.store';
 import { DoctorReview } from '../../lib/types/api';
 import { getErrorMessage } from '../../lib/api/error.utils';
+import { UserAvatar } from '../../components/UserAvatar';
 import { Star, Loader2, MessageSquare, Pencil, Trash2 } from 'lucide-react';
 
 export const ReviewFeedPage: React.FC = () => {
@@ -69,6 +71,8 @@ export const ReviewFeedPage: React.FC = () => {
       });
       toast.success('Review updated');
       setEditingId(null);
+      void queryClient.invalidateQueries({ queryKey: ['doctor', doctorId] });
+      void queryClient.invalidateQueries({ queryKey: ['doctor-rating', doctorId] });
       await loadReviews();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, 'Failed to update review'));
@@ -80,6 +84,8 @@ export const ReviewFeedPage: React.FC = () => {
     try {
       await reviewApi.deleteReview(reviewId);
       toast.success('Review deleted');
+      void queryClient.invalidateQueries({ queryKey: ['doctor', doctorId] });
+      void queryClient.invalidateQueries({ queryKey: ['doctor-rating', doctorId] });
       await loadReviews();
     } catch (error: unknown) {
       toast.error(getErrorMessage(error, 'Failed to delete review'));
@@ -122,11 +128,14 @@ export const ReviewFeedPage: React.FC = () => {
               <div key={review.id} className="card p-6 animate-slide-in-up">
                 <div className="flex items-center justify-between mb-3">
                   <div className="flex items-center gap-3">
-                    <div className="w-8 h-8 bg-brand-50 rounded-lg flex items-center justify-center text-xs font-bold text-brand-600 ring-1 ring-brand-100">
-                      {review.reviewer
-                        ? `${review.reviewer.firstname[0]}${review.reviewer.lastname[0]}`.toUpperCase()
-                        : review.reviewerId.substring(0, 2).toUpperCase()}
-                    </div>
+                    <UserAvatar
+                      avatar={review.reviewer?.avatar}
+                      firstname={review.reviewer?.firstname}
+                      lastname={review.reviewer?.lastname}
+                      alt={review.reviewer ? `${review.reviewer.firstname} ${review.reviewer.lastname}` : undefined}
+                      fallback={!review.reviewer ? review.reviewerId.substring(0, 2).toUpperCase() : undefined}
+                      className="w-8 h-8 bg-brand-50 rounded-lg text-xs font-bold text-brand-600 ring-1 ring-brand-100 flex-shrink-0"
+                    />
                     <div>
                       <span className="font-medium text-sm text-gray-900">
                         {review.reviewer

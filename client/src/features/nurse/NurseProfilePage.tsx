@@ -7,6 +7,7 @@ import { Loader2, User, Shield, Stethoscope, CheckCircle, Lock, Upload } from 'l
 import toast from 'react-hot-toast';
 import { getErrorMessage } from '../../lib/api/error.utils';
 import { resolveFileUrl } from '../../lib/api/client';
+import { UserAvatar } from '../../components/UserAvatar';
 import { formatSpecialty } from '../../lib/format';
 import { NursePermission } from '../../lib/types/api';
 
@@ -127,7 +128,7 @@ export const NurseProfilePage: React.FC = () => {
                 <h2 className="text-xl font-bold text-gray-900">{user?.firstname} {user?.lastname}</h2>
                 <p className="text-sm text-gray-500 mt-0.5">{user?.email}</p>
                 <div className="flex items-center gap-2 mt-2">
-                  <span className="badge badge-teal text-xs">Nurse</span>
+                  <span className="badge badge-blue text-xs">Nurse</span>
                 </div>
                 <button onClick={() => setEditing(true)} className="mt-3 text-sm text-brand-600 hover:text-brand-700 font-medium">
                   Edit Profile
@@ -154,9 +155,14 @@ export const NurseProfilePage: React.FC = () => {
             return (
               <div key={assignment.id} className="card p-6 animate-slide-in-up">
                 <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-100 to-brand-50 flex items-center justify-center flex-shrink-0">
-                    <Stethoscope className="w-6 h-6 text-brand-600" />
-                  </div>
+                  <UserAvatar
+                    avatar={docUser?.avatar}
+                    firstname={docUser?.firstname}
+                    lastname={docUser?.lastname}
+                    alt={docUser ? `Dr. ${docUser.firstname} ${docUser.lastname}` : 'Doctor avatar'}
+                    fallback={<Stethoscope className="w-6 h-6 text-brand-600" />}
+                    className="w-12 h-12 rounded-xl bg-gradient-to-br from-brand-100 to-brand-50 flex-shrink-0"
+                  />
                   <div className="flex-1">
                     <h3 className="font-semibold text-gray-900">
                       Dr. {docUser?.firstname} {docUser?.lastname}

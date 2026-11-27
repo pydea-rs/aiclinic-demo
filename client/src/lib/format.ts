@@ -53,6 +53,30 @@ const VISIT_METHOD_LABELS: Record<string, string> = {
   ON_SITE: 'On-Site',
 };
 
+const VISIT_TYPE_LABELS: Record<string, string> = {
+  CONSULTATION: 'Consultation',
+  EXAMINATION: 'Clinical Examination',
+  SURGERY: 'Surgery',
+  LABORATORY: 'Laboratory',
+  RADIOLOGY: 'Radiology',
+  PHARMACY: 'Pharmacy',
+  DENTISTRY: 'Dentistry',
+  THERAPY: 'Therapy',
+  NUTRITION: 'Nutrition',
+  DIRECT_DIAGNOSIS: 'Direct Diagnosis',
+  OTHER: 'Other',
+};
+
+/** Visit methods reserved for real-time calling (Phase 19) and disabled in decisions. */
+export const UNIMPLEMENTED_VISIT_METHODS: ReadonlySet<string> = new Set([
+  'VOICE_CALL',
+  'VIDEO_CALL',
+]);
+
+export function isVisitMethodSoon(method?: string | null): boolean {
+  return Boolean(method && UNIMPLEMENTED_VISIT_METHODS.has(method));
+}
+
 const DOC_TYPE_LABELS: Record<string, string> = {
   LICENSE: 'Medical License',
   ID_CARD: 'ID Card',
@@ -97,6 +121,10 @@ export function formatVisitMethod(method: string): string {
   return VISIT_METHOD_LABELS[method] || toTitleCase(method);
 }
 
+export function formatVisitType(type: string): string {
+  return VISIT_TYPE_LABELS[type] || toTitleCase(type);
+}
+
 export function formatDocType(type: string): string {
   return DOC_TYPE_LABELS[type] || toTitleCase(type);
 }
@@ -107,4 +135,14 @@ export function formatNotificationType(type: string): string {
 
 export function formatEnum(value: string): string {
   return toTitleCase(value);
+}
+
+/** Uppercase first-letter initials for a user, falling back when names are absent. */
+export function getUserInitials(
+  firstname?: string | null,
+  lastname?: string | null,
+  defaultInitials = '?',
+): string {
+  const initials = `${firstname?.[0] || ''}${lastname?.[0] || ''}`.toUpperCase();
+  return initials || defaultInitials;
 }
