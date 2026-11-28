@@ -91,7 +91,7 @@ export const AppointmentsPage: React.FC = () => {
           </div>
           <div>
             <h1 className="text-2xl font-bold gradient-text">Appointments</h1>
-            <p className="text-gray-500 text-sm">Manage and track your appointments</p>
+            <p className="text-gray-500 dark:text-slate-400 text-sm">Manage and track your appointments</p>
           </div>
         </div>
       </div>
@@ -99,11 +99,11 @@ export const AppointmentsPage: React.FC = () => {
       {appointments.length === 0 ? (
         <div className="flex-1 flex items-center justify-center animate-scale-in">
           <div className="text-center max-w-sm">
-            <div className="w-16 h-16 rounded-2xl bg-gray-100 flex items-center justify-center mx-auto mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-gray-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+            <div className="w-16 h-16 rounded-2xl bg-gray-100 dark:bg-slate-800 flex items-center justify-center mx-auto mb-4 animate-float">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-8 w-8 text-gray-400 dark:text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
             </div>
-            <p className="text-gray-500 font-medium">No appointments found</p>
-            <p className="text-gray-400 text-sm mt-1">Your appointments will appear here once booked</p>
+            <p className="text-gray-500 dark:text-slate-300 font-medium">No appointments found</p>
+            <p className="text-gray-400 dark:text-slate-500 text-sm mt-1">Your appointments will appear here once booked</p>
             <Link to="/doctors" className="btn-primary inline-flex items-center gap-2 px-5 py-2.5 mt-5 text-sm">
               Find a Doctor
             </Link>
@@ -116,8 +116,8 @@ export const AppointmentsPage: React.FC = () => {
               <div key={appointment.id} className="card card-hover p-6 animate-slide-in-up">
                 <div className="flex items-center justify-between mb-4">
                   <div>
-                    <h3 className="font-semibold">Appointment #{appointment.id}</h3>
-                    <p className="text-sm text-gray-500">
+                    <h3 className="font-semibold text-gray-900 dark:text-white">Appointment #{appointment.id}</h3>
+                    <p className="text-sm text-gray-500 dark:text-slate-400">
                       {appointment.doctor?.user
                         ? `Dr. ${appointment.doctor.user.firstname} ${appointment.doctor.user.lastname}`
                         : `Doctor #${appointment.doctorId}`}
@@ -130,34 +130,34 @@ export const AppointmentsPage: React.FC = () => {
 
                 <div className="grid grid-cols-2 gap-4 text-sm">
                   <div>
-                    <span className="text-gray-500">Date & Time:</span>
-                    <p className="font-medium">{new Date(appointment.dateTime).toLocaleString()}</p>
+                    <span className="text-gray-500 dark:text-slate-400">Date & Time:</span>
+                    <p className="font-medium text-gray-900 dark:text-slate-200">{new Date(appointment.dateTime).toLocaleString()}</p>
                   </div>
                   <div>
-                    <span className="text-gray-500">Duration:</span>
-                    <p className="font-medium">{appointment.durationMinutes} minutes</p>
+                    <span className="text-gray-500 dark:text-slate-400">Duration:</span>
+                    <p className="font-medium text-gray-900 dark:text-slate-200">{appointment.durationMinutes} minutes</p>
                   </div>
                   <div>
-                    <span className="text-gray-500">Price:</span>
-                    <p className="font-medium">${appointment.price}</p>
+                    <span className="text-gray-500 dark:text-slate-400">Price:</span>
+                    <p className="font-medium text-gray-900 dark:text-slate-200">${appointment.price}</p>
                   </div>
                   <div>
-                    <span className="text-gray-500">Method:</span>
-                    <p className="font-medium">{formatVisitMethod(appointment.method)}</p>
+                    <span className="text-gray-500 dark:text-slate-400">Method:</span>
+                    <p className="font-medium text-gray-900 dark:text-slate-200">{formatVisitMethod(appointment.method)}</p>
                   </div>
                 </div>
 
                 {user?.role === 'PATIENT' && appointment.status === 'PENDING' && (
-                  <div className="mt-4 pt-4 border-t border-gray-100 flex items-center gap-4">
+                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-slate-800 flex items-center gap-4">
                     <Link
                       to={`/appointments/${appointment.id}`}
-                      className="text-brand-600 hover:text-brand-700 font-medium transition-colors"
+                      className="text-brand-600 dark:text-brand-400 hover:text-brand-700 font-medium transition-colors"
                     >
                       View Details
                     </Link>
                     <button
                       onClick={() => handleCancel(appointment.id)}
-                      className="text-red-600 hover:text-red-700 font-medium transition-colors"
+                      className="text-red-600 dark:text-red-400 hover:text-red-700 font-medium transition-colors"
                     >
                       Cancel Appointment
                     </button>
@@ -165,10 +165,10 @@ export const AppointmentsPage: React.FC = () => {
                 )}
 
                 {!(user?.role === 'PATIENT' && appointment.status === 'PENDING') && (
-                  <div className="mt-4 pt-4 border-t border-gray-100">
+                  <div className="mt-4 pt-4 border-t border-gray-100 dark:border-slate-800">
                     <Link
                       to={`/appointments/${appointment.id}`}
-                      className="text-brand-600 hover:text-brand-700 font-medium transition-colors"
+                      className="text-brand-600 dark:text-brand-400 hover:text-brand-700 font-medium transition-colors"
                     >
                       View Details
                     </Link>
@@ -187,7 +187,7 @@ export const AppointmentsPage: React.FC = () => {
               >
                 Previous
               </button>
-              <span className="text-sm text-gray-600 font-medium">
+              <span className="text-sm text-gray-600 dark:text-slate-400 font-medium">
                 Page {page} of {totalPages}
               </span>
               <button
